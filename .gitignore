@@ -1,0 +1,22 @@
+# Dépendances
+node_modules/
+
+# Builds
+dist/
+dist-electron/
+release/
+*.log
+
+# Fichiers locaux / environnement
+.env
+.env.local
+
+# Base de données et données locales (ne JAMAIS committer)
+*.db
+*.db-journal
+*.sqlite
+AppData/
+
+# Système
+.DS_Store
+Thumbs.db
