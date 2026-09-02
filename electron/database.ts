@@ -1064,6 +1064,11 @@ export function updateUser(id: number, data: { username?: string; password?: str
 }
 
 export function deleteUser(id: number) {
+  // Le compte administrateur ne doit jamais pouvoir être supprimé
+  const target = queryOne('SELECT id, role FROM users WHERE id = ?', [id])
+  if (target && target.role === 'admin') {
+    throw new Error('Le compte administrateur ne peut pas être supprimé')
+  }
   return runWrite('DELETE FROM users WHERE id = ?', [id])
 }
 

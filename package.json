@@ -81,7 +81,6 @@
     },
     "nsis": {
       "oneClick": true,
-      "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "KB POS",
@@ -92,7 +91,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "VOTRE_COMPTE_GITHUB",
+        "owner": "BlanchardKouabenan",
         "repo": "pos-volaille",
         "releaseType": "release"
       }

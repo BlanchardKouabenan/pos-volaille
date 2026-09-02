@@ -27,17 +27,28 @@ function NumPad({ value, onChange }: { value: string; onChange: (v: string) => v
   }
   const keys = ['7', '8', '9', '4', '5', '6', '1', '2', '3', '000', '0', '⌫']
   return (
-    <div className="grid grid-cols-3 gap-2">
-      {keys.map(k => (
-        <button key={k} onClick={() => press(k)}
-          className="h-12 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-800 font-bold text-lg rounded-xl transition-all">
-          {k}
+    <div className="space-y-2">
+      <input
+        autoFocus
+        inputMode="decimal"
+        autoComplete="off"
+        value={value}
+        onChange={e => onChange(e.target.value.replace(/[^0-9.]/g, ''))}
+        placeholder="Tapez au clavier ou utilisez le pavé"
+        className="w-full text-3xl font-bold text-center text-gray-800 bg-white rounded-xl py-2 border border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+      />
+      <div className="grid grid-cols-3 gap-2">
+        {keys.map(k => (
+          <button key={k} type="button" onClick={() => press(k)}
+            className="h-12 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-800 font-bold text-lg rounded-xl transition-all">
+            {k}
+          </button>
+        ))}
+        <button type="button" onClick={() => press('C')}
+          className="col-span-3 h-10 bg-red-100 hover:bg-red-200 text-red-700 font-bold rounded-xl transition-all">
+          Effacer tout
         </button>
-      ))}
-      <button onClick={() => press('C')}
-        className="col-span-3 h-10 bg-red-100 hover:bg-red-200 text-red-700 font-bold rounded-xl transition-all">
-        Effacer tout
-      </button>
+      </div>
     </div>
   )
 }

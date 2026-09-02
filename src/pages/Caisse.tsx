@@ -73,23 +73,38 @@ function NumPad({ value, onChange, onConfirm }: { value: string; onChange: (v: s
   }
   const keys = ['7','8','9','4','5','6','1','2','3',',','0','⌫']
   return (
-    <div className="grid grid-cols-3 gap-2">
-      {keys.map(k => (
-        <button key={k} onClick={() => press(k)}
-          className="h-12 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-800 font-bold text-lg rounded-xl transition-all">
-          {k}
+    <div className="space-y-2">
+      <input
+        autoFocus
+        inputMode="decimal"
+        autoComplete="off"
+        value={value}
+        onChange={e => onChange(e.target.value.replace(/[^0-9,.]/g, '').replace(/\./g, ','))}
+        onKeyDown={e => {
+          if (e.key === 'Enter' && onConfirm) { e.preventDefault(); onConfirm() }
+          if (e.key === 'Escape') onChange('')
+        }}
+        placeholder="Tapez au clavier ou utilisez le pavé"
+        className="w-full text-3xl font-bold text-center text-gray-800 bg-white rounded-xl py-2 border border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+      />
+      <div className="grid grid-cols-3 gap-2">
+        {keys.map(k => (
+          <button key={k} type="button" onClick={() => press(k)}
+            className="h-12 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-800 font-bold text-lg rounded-xl transition-all">
+            {k}
+          </button>
+        ))}
+        <button type="button" onClick={() => press('C')}
+          className="col-span-2 h-12 bg-red-100 hover:bg-red-200 active:bg-red-300 text-red-700 font-bold rounded-xl transition-all">
+          Effacer
         </button>
-      ))}
-      <button onClick={() => press('C')}
-        className="col-span-2 h-12 bg-red-100 hover:bg-red-200 active:bg-red-300 text-red-700 font-bold rounded-xl transition-all">
-        Effacer
-      </button>
-      {onConfirm && (
-        <button onClick={onConfirm}
-          className="col-span-3 h-12 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2">
-          <Check size={18} /> OK
-        </button>
-      )}
+        {onConfirm && (
+          <button type="button" onClick={onConfirm}
+            className="col-span-3 h-12 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-2">
+            <Check size={18} /> OK
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -959,7 +974,7 @@ export default function Caisse() {
         {/* ─── LEFT: Products ─────────────────────────────────── */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Search + Category filter */}
-          <div className="bg-white border-b border-gray-200 p-3 space-y-2 flex-shrink-0">
+          <div className="bg-white border-b border-gray-200 p-2.5 space-y-1.5 flex-shrink-0">
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
@@ -970,7 +985,7 @@ export default function Caisse() {
                   onChange={e => setSearch(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
                   placeholder="Rechercher un produit ou scanner un code-barre..."
-                  className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full pl-12 pr-4 py-2.5 border border-gray-300 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 {search && (
                   <button onClick={() => setSearch('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
@@ -983,7 +998,7 @@ export default function Caisse() {
               <button
                 onClick={() => setShowLibreModal(true)}
                 title="Vendre un article libre (sans code-barres)"
-                className="h-12 px-4 bg-gray-100 hover:bg-emerald-100 hover:text-emerald-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
+                className="h-10 px-4 bg-gray-100 hover:bg-emerald-100 hover:text-emerald-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
               >
                 <Package size={18} />
                 <span className="hidden sm:inline">Article libre</span>
@@ -993,7 +1008,7 @@ export default function Caisse() {
               <button
                 onClick={() => setShowRetourModal(true)}
                 title="Retour / Remboursement article"
-                className="h-12 px-4 bg-gray-100 hover:bg-red-100 hover:text-red-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
+                className="h-10 px-4 bg-gray-100 hover:bg-red-100 hover:text-red-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
               >
                 <RotateCcw size={18} />
                 <span className="hidden sm:inline">Retour</span>
@@ -1004,7 +1019,7 @@ export default function Caisse() {
                 <button
                   onClick={handleOuvrirCodeRotatif}
                   title="Code superviseur rotatif (pour autoriser les retours)"
-                  className="h-12 px-4 bg-orange-50 hover:bg-orange-100 text-orange-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-orange-200"
+                  className="h-10 px-4 bg-orange-50 hover:bg-orange-100 text-orange-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-orange-200"
                 >
                   <ShieldAlert size={18} />
                   <span className="hidden sm:inline">Code</span>
@@ -1023,7 +1038,7 @@ export default function Caisse() {
                   }
                 }}
                 title={customerWinOpen ? 'Fermer écran client' : 'Ouvrir écran client (2e écran)'}
-                className={`h-12 px-4 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border ${customerWinOpen ? 'bg-emerald-100 border-emerald-300 text-emerald-700 hover:bg-emerald-200' : 'bg-gray-100 border-gray-200 text-gray-600 hover:bg-emerald-50'}`}
+                className={`h-10 px-4 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border ${customerWinOpen ? 'bg-emerald-100 border-emerald-300 text-emerald-700 hover:bg-emerald-200' : 'bg-gray-100 border-gray-200 text-gray-600 hover:bg-emerald-50'}`}
               >
                 <span className="text-lg">🖥️</span>
                 <span className="hidden sm:inline">{customerWinOpen ? 'Écran ON' : 'Écran client'}</span>
@@ -1033,7 +1048,7 @@ export default function Caisse() {
               <div className="flex rounded-xl border border-gray-200 overflow-hidden flex-shrink-0">
                 {([3,4,5] as const).map(n => (
                   <button key={n} onClick={() => { setGridCols(n); localStorage.setItem('pos_grid_cols', String(n)) }}
-                    className={`h-12 w-10 text-sm font-bold transition-all ${gridCols === n ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                    className={`h-10 w-10 text-sm font-bold transition-all ${gridCols === n ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
                     {n}
                   </button>
                 ))}
@@ -1043,7 +1058,7 @@ export default function Caisse() {
               <button
                 onClick={holdCart}
                 title="Mettre la vente en cours en attente"
-                className="h-12 px-4 bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
+                className="h-10 px-4 bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
               >
                 <Clock size={18} />
                 <span className="hidden sm:inline">Pause</span>
@@ -1053,7 +1068,7 @@ export default function Caisse() {
               <button
                 onClick={() => setShowHeldModal(true)}
                 title="Ventes en attente"
-                className="h-12 px-4 bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200 relative"
+                className="h-10 px-4 bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200 relative"
               >
                 <RotateCcw size={18} />
                 <span className="hidden sm:inline">En attente</span>
@@ -1068,7 +1083,7 @@ export default function Caisse() {
               <button
                 onClick={openMouvementModal}
                 title="Versements / retraits d'espèces en cours de journée"
-                className="h-12 px-4 bg-gray-100 hover:bg-emerald-100 hover:text-emerald-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
+                className="h-10 px-4 bg-gray-100 hover:bg-emerald-100 hover:text-emerald-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
               >
                 <Wallet size={18} />
                 <span className="hidden sm:inline">Fonds</span>
@@ -1078,7 +1093,7 @@ export default function Caisse() {
               <button
                 onClick={() => setShowTiroirConfirm(true)}
                 title="Ouverture tiroir"
-                className="h-12 px-4 bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
+                className="h-10 px-4 bg-gray-100 hover:bg-amber-100 hover:text-amber-700 text-gray-600 rounded-xl flex items-center gap-2 font-semibold text-sm transition-all flex-shrink-0 border border-gray-200"
               >
                 <UnlockKeyhole size={18} />
                 <span className="hidden sm:inline">Tiroir</span>
@@ -1860,9 +1875,6 @@ export default function Caisse() {
                         Montant à utiliser sur {bonusPayMode === 'cagnotte' ? 'la cagnotte' : 'le porte-monnaie'}{' '}
                         <span className="text-gray-400">(max {fmt(bonusPayMode === 'cagnotte' ? maxCagnotteFcfa : maxWalletFcfa)})</span>
                       </p>
-                      <div className="text-2xl font-bold text-center text-gray-800 mb-2 bg-white rounded-xl py-2 border">
-                        {bonusSaisi || '0'} {monnaie}
-                      </div>
                       <div className="grid grid-cols-4 gap-1.5 mb-2">
                         {[
                           Math.min(bonusPayMode === 'cagnotte' ? maxCagnotteFcfa : maxWalletFcfa, totalCart),
@@ -1970,9 +1982,6 @@ export default function Caisse() {
                         <span className="font-bold">{MODE_PAIEMENT_CONFIG.find(m => m.id === payActiveMode)?.label}</span>
                         {' '}<span className="text-gray-400">(reste max {fmt(Math.max(0, totalNet - paySplitTotal + (paySplit[payActiveMode] || 0)))})</span>
                       </p>
-                      <div className="text-3xl font-bold text-center text-gray-800 mb-2 bg-white rounded-xl py-2 border">
-                        {paySplitInput || '0'} {monnaie}
-                      </div>
                       <div className="grid grid-cols-4 gap-1.5 mb-2">
                         {[1000, 2000, 5000, 10000, 20000]
                           .filter((v) => v <= totalNet)

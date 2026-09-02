@@ -268,9 +268,12 @@ const [licenceToken, setLicenceToken] = useState('')
   }
 
   const handleDeleteUser = async (u: User) => {
+    if (u.role === 'admin') { alert('Le compte administrateur ne peut pas être supprimé'); return }
     if (!confirm(`Supprimer l'utilisateur "${u.nom}" ?`)) return
-    await deleteUser(u.id)
-    setUsers(await getUsers())
+    try {
+      await deleteUser(u.id)
+      setUsers(await getUsers())
+    } catch { alert('Impossible de supprimer ce compte (administrateur protégé)') }
   }
 
   // Codes superviseur
@@ -409,7 +412,7 @@ const [licenceToken, setLicenceToken] = useState('')
   const showSaveButton = tab !== 'utilisateurs' && tab !== 'superviseur' && tab !== 'sauvegardes' && tab !== 'balance' && tab !== 'commerce' && tab !== 'forfait'
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 p-4 flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
@@ -434,7 +437,7 @@ const [licenceToken, setLicenceToken] = useState('')
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="p-6">
         {/* Entreprise */}
         {tab === 'entreprise' && (
           <div className="max-w-2xl space-y-5">
@@ -846,7 +849,16 @@ const [licenceToken, setLicenceToken] = useState('')
                           <button onClick={() => openEditUser(u)} className="p-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg transition-colors">
                             <Edit2 size={14} />
                           </button>
-                          <button onClick={() => handleDeleteUser(u)} className="p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-colors">
+                          <button
+                            onClick={() => handleDeleteUser(u)}
+                            disabled={u.role === 'admin'}
+                            title={u.role === 'admin' ? 'Le compte administrateur ne peut pas être supprimé' : 'Supprimer'}
+                            className={`p-2 rounded-lg transition-colors ${
+                              u.role === 'admin'
+                                ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
+                                : 'bg-red-50 hover:bg-red-100 text-red-600'
+                            }`}
+                          >
                             <Trash2 size={14} />
                           </button>
                         </div>

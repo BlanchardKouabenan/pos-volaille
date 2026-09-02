@@ -322,7 +322,7 @@ export default function Layout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-hidden">
+        <main className="flex-1 overflow-y-auto">
           <Outlet />
         </main>
       </div>
