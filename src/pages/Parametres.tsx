@@ -7,7 +7,8 @@ import { getParametres, setParametres, getUsers, createUser, updateUser, deleteU
   profilList, profilApply, getCategories,
   listeImprimantes, testImprimante,
   emailRestartScheduler, emailEnvoyerHoraire, emailTestConfig, emailGetJournal,
-  forfaitGet, forfaitProlonger, forfaitGenererLicence, forfaitAppliquerLicence } from '@/lib/ipc'
+  forfaitGet, forfaitProlonger, forfaitGenererLicence, forfaitAppliquerLicence,
+  appGetVersion, appCheckForUpdates, appQuitAndInstall, appOnUpdateStatus } from '@/lib/ipc'
 import { useAuthStore } from '@/store/authStore'
 import { useProfilStore } from '@/store/profilStore'
 import type { User, UserRole, CodeSuperviseur, ProfilListEntry, ProfilModule } from '@/types'
@@ -56,6 +57,13 @@ export default function Parametres() {
   const [showPass, setShowPass] = useState(false)
   const [userError, setUserError] = useState('')
   const [savingUser, setSavingUser] = useState(false)
+
+  // Mise à jour automatique
+  const [appVersion, setAppVersion] = useState('')
+  const [updateState, setUpdateState] = useState('')
+  const [updateInfo, setUpdateInfo] = useState<any>(null)
+  const [updateProgress, setUpdateProgress] = useState(0)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   // Type de commerce
   const current = useProfilStore(s => s.current)
@@ -356,6 +364,27 @@ const [licenceToken, setLicenceToken] = useState('')
     }
   }, [tab])
 
+  // Mise à jour : version courante + écoute des événements
+  useEffect(() => {
+    appGetVersion().then(v => setAppVersion(v || '')).catch(() => {})
+    const off = appOnUpdateStatus((st: any) => {
+      setUpdateState(st.state)
+      setUpdateInfo(st.info || null)
+      if (typeof st.progress === 'number') setUpdateProgress(st.progress)
+    })
+    return off
+  }, [])
+
+  const verifierMaj = async () => {
+    setCheckingUpdate(true)
+    try {
+      const r = await appCheckForUpdates()
+      if (r?.status === 'dev') setUpdateState('dev')
+      else if (r?.status === 'checked' && !r.updateAvailable) setUpdateState('up-to-date')
+    } catch { setUpdateState('error') }
+    setCheckingUpdate(false)
+  }
+
   if (loading) return (
     <div className="flex-1 flex items-center justify-center h-full">
       <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
@@ -450,6 +479,57 @@ const [licenceToken, setLicenceToken] = useState('')
                     className="input-field" min="0" max="100" step="0.5" />
                 </div>
               </div>
+            </div>
+
+            {/* À propos / Mise à jour */}
+            <div className="bg-white rounded-2xl shadow-card p-6 space-y-4">
+              <h2 className="font-bold text-gray-800 text-lg flex items-center gap-2"><Download size={18} className="text-blue-600" /> Mise à jour de l'application</h2>
+              <div className="text-sm text-gray-600 space-y-1">
+                <div className="flex justify-between"><span className="text-gray-400">Version installée</span><span className="font-mono font-bold">{appVersion || '—'}</span></div>
+                <p className="text-xs text-gray-400 pt-1">
+                  Votre base de données (articles, ventes, clients…) est conservée dans un dossier séparé et n'est <strong>jamais touchée</strong> lors d'une mise à jour.
+                </p>
+              </div>
+
+              {updateState === 'checking' && (
+                <div className="flex items-center gap-2 text-sm text-gray-500"><RefreshCw size={16} className="animate-spin" /> Vérification des mises à jour…</div>
+              )}
+              {updateState === 'dev' && (
+                <p className="text-sm text-gray-400">Mise à jour automatique active uniquement dans l'application installée (pas en mode développement).</p>
+              )}
+              {updateState === 'available' && (
+                <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-3 text-sm flex items-center gap-2">
+                  <Download size={16} /> Nouvelle version disponible : <span className="font-mono font-bold">{updateInfo?.version}</span> — téléchargement…
+                </div>
+              )}
+              {updateState === 'downloading' && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm text-blue-700"><span>Téléchargement…</span><span className="font-mono">{Math.round(updateProgress)}%</span></div>
+                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-600 transition-all" style={{ width: `${updateProgress}%` }} />
+                  </div>
+                </div>
+              )}
+              {updateState === 'downloaded' && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl p-3 text-sm flex items-center gap-2">
+                  <Download size={16} /> Nouvelle version prête à installer.
+                  <button onClick={() => appQuitAndInstall()} className="ml-auto btn-success text-xs px-3 py-1.5 rounded-lg font-bold">Redémarrer & installer</button>
+                </div>
+              )}
+              {updateState === 'up-to-date' && (
+                <p className="text-sm text-emerald-600 flex items-center gap-2"><Check size={16} /> L'application est à jour.</p>
+              )}
+              {updateState === 'error' && (
+                <p className="text-sm text-red-600 flex items-center gap-2"><AlertTriangle size={16} /> Erreur lors de la vérification. Vérifiez la connexion Internet.</p>
+              )}
+              {updateState === 'not-available' && (
+                <p className="text-sm text-gray-500">Aucune mise à jour pour le moment.</p>
+              )}
+
+              <button onClick={verifierMaj} disabled={checkingUpdate || updateState === 'downloading' || updateState === 'downloaded'}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
+                <RefreshCw size={15} className={checkingUpdate ? 'animate-spin' : ''} /> Vérifier les mises à jour
+              </button>
             </div>
           </div>
         )}

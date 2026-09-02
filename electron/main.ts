@@ -59,6 +59,42 @@ import { sendSms, formatSmsTicket } from './sms'
 import { envoyerFondCaisseCloture, envoyerPointVenteHoraire, envoyerControleReleve, envoyerAlerteForfait, envoyerTestEmail, envoyerResumeJournalier, envoyerEtatInventaire, envoyerAlertesStock } from './reports'
 import { getForfaitInfo, prolongerForfaitLocal, appliquerLicence, genererLicence } from './license'
 
+// ─── MISE À JOUR AUTOMATIQUE ──────────────────────────────────────────────────
+import { autoUpdater } from 'electron-updater'
+import { EventEmitter } from 'events'
+
+const updaterEvents = new EventEmitter()
+
+function sendUpdateStatus(state: string, info?: any, progress?: number) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('app:updateStatus', { state, info, progress })
+  }
+  updaterEvents.emit('status', { state, info, progress })
+}
+
+function setUpdater() {
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'))
+  autoUpdater.on('update-available', (info) => sendUpdateStatus('available', info))
+  autoUpdater.on('update-not-available', (info) => sendUpdateStatus('not-available', info))
+  autoUpdater.on('download-progress', (p) => sendUpdateStatus('downloading', undefined, p.percent))
+  autoUpdater.on('update-downloaded', (info) => sendUpdateStatus('downloaded', info))
+  autoUpdater.on('error', (err) => {
+    console.error('Auto-update error:', err)
+    sendUpdateStatus('error', err.message)
+  })
+}
+
+let updatesConfigured = false
+function configureUpdater() {
+  if (updatesConfigured) return
+  updatesConfigured = true
+  setUpdater()
+  try { autoUpdater.checkForUpdatesAndNotify() } catch (e) { console.error(e) }
+}
+
 let mainWindow: BrowserWindow | null = null
 let customerWindow: BrowserWindow | null = null
 let syncHttpServer: http.Server | null = null
@@ -200,6 +236,10 @@ app.whenReady().then(async () => {
   try { runAlertesAuto() } catch {}
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+  // Vérifier les mises à jour au démarrage (uniquement en app installée/packagée)
+  if (app.isPackaged) {
+    setTimeout(() => { try { configureUpdater() } catch {} }, 4000)
+  }
 })
 
 app.on('window-all-closed', () => {
@@ -1022,4 +1062,22 @@ ipcMain.handle('image:deleteProduit', async (_e, fileUrl: string) => {
       fs.unlinkSync(filePath)
     }
   } catch {}
+})
+
+// ─── MISE À JOUR (IPC vers le renderer) ───────────────────────────────────────
+ipcMain.handle('app:getVersion', () => app.getVersion())
+
+ipcMain.handle('app:checkForUpdates', async () => {
+  if (!app.isPackaged) return { status: 'dev' }
+  try {
+    configureUpdater()
+    const result = await autoUpdater.checkForUpdates()
+    return { status: 'checked', updateAvailable: !!result?.updateInfo }
+  } catch (e: any) {
+    return { status: 'error', error: e?.message }
+  }
+})
+
+ipcMain.handle('app:quitAndInstall', () => {
+  try { autoUpdater.quitAndInstall() } catch {}
 })

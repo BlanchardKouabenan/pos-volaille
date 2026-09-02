@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "date-fns": "^3.3.1",
+    "electron-updater": "^6.1.7",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "lucide-react": "^0.344.0",
@@ -79,13 +80,23 @@
       "signingHashAlgorithms": null
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "KB POS",
-      "license": "assets/license.txt"
+      "license": "assets/license.txt",
+      "differentialPackage": true,
+      "deleteAppDataOnUninstall": false
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "VOTRE_COMPTE_GITHUB",
+        "repo": "pos-volaille",
+        "releaseType": "release"
+      }
+    ],
     "mac": {
       "target": "dmg",
       "icon": "assets/icon.icns"

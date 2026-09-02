@@ -328,5 +328,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteDevis: (id: number) => ipcRenderer.invoke('commercial:deleteDevis', id),
     transformerDevisEnVente: (devisId: number, caissierId: number, modePaiement: string, montantPaye: number) => ipcRenderer.invoke('commercial:transformerDevisEnVente', devisId, caissierId, modePaiement, montantPaye),
     getDashboard: (dateDebut: string, dateFin: string) => ipcRenderer.invoke('commercial:getDashboard', dateDebut, dateFin),
+  },
+  app: {
+    getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    checkForUpdates: () => ipcRenderer.invoke('app:checkForUpdates'),
+    quitAndInstall: () => ipcRenderer.invoke('app:quitAndInstall'),
+    onUpdateStatus: (cb: (status: { state: string; info?: any; progress?: number }) => void) => {
+      const listener = (_e: any, status: any) => cb(status)
+      ipcRenderer.on('app:updateStatus', listener)
+      return () => ipcRenderer.removeListener('app:updateStatus', listener)
+    },
   }
 })

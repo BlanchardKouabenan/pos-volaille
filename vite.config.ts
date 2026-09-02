@@ -14,7 +14,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['sql.js', 'node-thermal-printer']
+              external: ['sql.js', 'node-thermal-printer', 'electron-updater']
             }
           }
         }
@@ -25,7 +25,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['sql.js', 'node-thermal-printer']
+              external: ['sql.js', 'node-thermal-printer', 'electron-updater']
             }
           }
         }
