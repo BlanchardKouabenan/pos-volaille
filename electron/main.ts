@@ -1079,11 +1079,12 @@ ipcMain.handle('app:checkForUpdates', async () => {
 })
 
 ipcMain.handle('app:quitAndInstall', () => {
-  // Ferme d'abord les fenêtres secondaires (écran client) qui peuvent retenir le
-  // process et faire échouer l'installation NSIS ("l'app ne peut pas être fermée").
-  try { if (customerWindow && !customerWindow.isDestroyed()) customerWindow.destroy() } catch {}
+  // Ferme d'abord toutes les fenêtres (y compris l'écran client) pour libérer le
+  // process, puis laisse le temps aux sous-processus de se terminer avant de
+  // lancer l'installation. Évite l'échec NSIS "l'app ne peut pas être fermée".
+  try { for (const w of BrowserWindow.getAllWindows()) { if (!w.isDestroyed()) w.destroy() } } catch {}
   try { if (syncHttpServer) { syncHttpServer.close(); syncHttpServer = null } } catch {}
-  setImmediate(() => {
+  setTimeout(() => {
     try { autoUpdater.quitAndInstall() } catch {}
-  })
+  }, 1500)
 })

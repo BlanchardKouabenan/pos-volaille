@@ -1,6 +1,6 @@
 {
   "name": "kb-pos",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Caisse enregistreuse paramétrable pour tous types de commerce",
   "author": "KB POS",
   "main": "dist-electron/main.js",
@@ -86,7 +86,8 @@
       "shortcutName": "KB POS",
       "license": "assets/license.txt",
       "differentialPackage": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     },
     "publish": [
       {
