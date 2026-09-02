@@ -1,6 +1,6 @@
 {
   "name": "kb-pos",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Caisse enregistreuse paramétrable pour tous types de commerce",
   "author": "KB POS",
   "main": "dist-electron/main.js",

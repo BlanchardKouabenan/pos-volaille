@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
 import path from 'path'
 import fs from 'fs'
 
@@ -144,6 +144,7 @@ function createWindow() {
     },
     title: 'KB POS',
     backgroundColor: '#f3f4f6',
+    autoHideMenuBar: true,
     show: false
   })
 
@@ -234,6 +235,10 @@ app.whenReady().then(async () => {
   startEmailScheduler()
   // Lancer la vérification automatique des alertes au démarrage
   try { runAlertesAuto() } catch {}
+  // Supprimer la barre de menu par défaut "File Edit View Window Help"
+  // (non adaptée à une caisse POS tactile / plein écran)
+  try { Menu.setApplicationMenu(null) } catch {}
+
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
   // Vérifier les mises à jour au démarrage (uniquement en app installée/packagée)
