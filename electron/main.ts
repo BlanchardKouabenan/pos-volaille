@@ -11,6 +11,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   getAllProduits, getProduitByBarcode, createProduit, updateProduit, deleteProduit, getLowStockProduits,
   addMouvement, getMouvements,
   createVente, getVentes, getVenteById, getVenteStats,
+  checkRemoteStocks, applyRemoteVenteStock, getRemoteCatalog, getRemoteClients, getCodeBarreById, syncRemoteCatalog,
   getAllClients, createClient, updateClient, deleteClient, getClientVentes,
   getPrixClients, getPrixClient, setPrixClient, setPrixClientsBulk,
   getAllParametres, setParametre, setParametres,
@@ -60,6 +61,7 @@ import { printReceipt, generateReceiptText, openCashDrawer, buildPrinterInterfac
 import { generateZpl, printZplFromString } from './zpl'
 import { sendSms, formatSmsTicket } from './sms'
 import { envoyerFondCaisseCloture, envoyerPointVenteHoraire, envoyerControleReleve, envoyerAlerteForfait, envoyerTestEmail, envoyerResumeJournalier, envoyerEtatInventaire, envoyerAlertesStock } from './reports'
+import { isRtClient, rtSendDecrement, refreshRtCatalog, flushRtQueue, isRtOnline } from './rt'
 import { getForfaitInfo, prolongerForfaitLocal, appliquerLicence, genererLicence } from './license'
 import { notifyDesktop, configureNotifications, notifyStock, notifyVente } from './notifications'
 import { uploadLocalFile, ensureRemoteDir, listRemoteDir } from './webdav'
@@ -103,6 +105,15 @@ function configureUpdater() {
 let mainWindow: BrowserWindow | null = null
 let customerWindow: BrowserWindow | null = null
 let syncHttpServer: http.Server | null = null
+
+// File d'attente d'écriture pour le stock partagé : traite les décréments des
+// caisses clientes UN PAR UN (atomicité) pour éviter les races sur le stock.
+let rtQueue: Promise<any> = Promise.resolve()
+function rtEnqueue<T>(fn: () => T | Promise<T>): Promise<T> {
+  const run = rtQueue.then(fn, fn)
+  rtQueue = run.then(() => {}, () => {})
+  return run
+}
 
 function createCustomerWindow() {
   if (customerWindow && !customerWindow.isDestroyed()) {
@@ -383,6 +394,30 @@ function stopAutoSync() {
   if (autoSyncInterval) { clearInterval(autoSyncInterval); autoSyncInterval = null }
 }
 
+// ─── MODE CLIENT-SERVEUR : polling pour les caisses clientes ──────────────────
+let rtClientInterval: NodeJS.Timeout | null = null
+function startRtClient() {
+  if (rtClientInterval) { clearInterval(rtClientInterval); rtClientInterval = null }
+  if (!isRtClient()) return
+  const run = async () => {
+    try {
+      const cat = await refreshRtCatalog()
+      if (!cat.offline) syncRemoteCatalog(cat.produits ?? [], cat.variantes ?? [])
+    } catch {}
+    try { await flushRtQueue() } catch {}
+  }
+  run()
+  rtClientInterval = setInterval(run, 15 * 1000)
+}
+function stopRtClient() {
+  if (rtClientInterval) { clearInterval(rtClientInterval); rtClientInterval = null }
+}
+function startRtServerIfConfigured() {
+  if (getAllParametres()?.reseau_role === 'serveur') {
+    try { startSyncServer(Number(getAllParametres()?.reseau_serveur_port || 7890)) } catch {}
+  }
+}
+
 let alertSchedulerInterval: NodeJS.Timeout | null = null
 
 // Exécution planifiée des règles d'alertes (stock faible, ardoises, fidélité)
@@ -410,6 +445,8 @@ app.whenReady().then(async () => {
   startEmailScheduler()
   startAutoSync()
   startAlertScheduler()
+  startRtClient()
+  startRtServerIfConfigured()
   // Configurer les notifications desktop selon les paramètres
   try {
     const p = getAllParametres()
@@ -485,6 +522,20 @@ ipcMain.handle('db:createVente', (_e, data) => {
     const montant = result?.total ?? data?.total ?? 0
     notifyVente('Vente enregistrée', `Vente de ${Number(montant).toLocaleString('fr-FR')} FCFA`)
   } catch {}
+  // Si caisse cliente : encaisser d'abord (déjà fait), puis décrémenter le stock serveur
+  if (result?.ticket && isRtClient()) {
+    const items = (data?.lignes ?? []).map((l: any) => {
+      const cb = l.code_barre ?? (l.produit_id ? getCodeBarreById(l.produit_id) : null)
+      return {
+        produit_id: l.produit_id,
+        quantite: l.quantite,
+        ...(cb ? { code_barre: cb } : {}),
+        ...(l.variante_id ? { variante_id: l.variante_id } : {}),
+        ...(l.nom_libre ? { nom_libre: l.nom_libre } : {})
+      }
+    }).filter((x: any) => x.produit_id !== 99999998)
+    rtSendDecrement(items, data?.caissier_id ?? 0, result.ticket).catch(() => {})
+  }
   return result
 })
 ipcMain.handle('db:getVentes', (_e, dateDebut, dateFin, limit) => getVentes(dateDebut, dateFin, limit))
@@ -991,6 +1042,35 @@ function startSyncServer(port: number) {
       try { const html = buildDashboardHtml(getDashboardProprietaireData(), getCurrentCodeRotationInfo()); res.writeHead(200); res.end(html) }
       catch { res.writeHead(500); res.end('Erreur') }
 
+    // ─── MODE CLIENT-SERVEUR : endpoints temps réel pour les caisses clientes ───
+    } else if (url.pathname === '/api/rt/catalog' && req.method === 'GET') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      try { const data = getRemoteCatalog(); res.writeHead(200); res.end(JSON.stringify({ ok: true, ...data, server_time: new Date().toISOString() })) }
+      catch (e: any) { res.writeHead(500); res.end(JSON.stringify({ ok: false, error: e.message })) }
+
+    } else if (url.pathname === '/api/rt/clients' && req.method === 'GET') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      try { res.writeHead(200); res.end(JSON.stringify({ ok: true, clients: getRemoteClients() })) }
+      catch (e: any) { res.writeHead(500); res.end(JSON.stringify({ ok: false, error: e.message })) }
+
+    } else if (url.pathname === '/api/rt/check-stock' && req.method === 'POST') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      try {
+        const body = await readBody(req)
+        const { items } = JSON.parse(body)
+        const result = checkRemoteStocks(items ?? [])
+        res.writeHead(200); res.end(JSON.stringify({ ok: true, items: result }))
+      } catch (e: any) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: e.message })) }
+
+    } else if (url.pathname === '/api/rt/decrement' && req.method === 'POST') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      try {
+        const parsed = JSON.parse(await readBody(req))
+        // Décrément sérialisé via la file d'attente -> atomicité du stock
+        const result = await rtEnqueue(() => applyRemoteVenteStock(parsed.items ?? [], parsed.caissier_id ?? 0, parsed.ticket ?? 'distant'))
+        res.writeHead(200); res.end(JSON.stringify({ ok: result.ok, insuffisants: result.insuffisants }))
+      } catch (e: any) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: e.message })) }
+
     } else {
       res.setHeader('Content-Type', 'application/json; charset=utf-8')
       res.writeHead(404); res.end(JSON.stringify({ ok: false, error: 'Not found' }))
@@ -1185,6 +1265,36 @@ ipcMain.handle('sync:getLocalIp', () => {
     }
   }
   return '127.0.0.1'
+})
+
+// ─── MODE CLIENT-SERVEUR : configuration & statut ─────────────────────────────
+ipcMain.handle('rt:setRole', (_e, role: string, ip?: string, port?: number) => {
+  setParametre('reseau_role', role)
+  if (ip !== undefined) setParametre('reseau_serveur_ip', ip)
+  if (port !== undefined) setParametre('reseau_serveur_port', String(port))
+  if (role === 'serveur') {
+    startSyncServer(Number(getAllParametres()?.reseau_serveur_port || 7890))
+    stopRtClient()
+  } else if (role === 'client') {
+    stopRtClient()
+    startRtClient()
+  } else {
+    stopSyncServer()
+    stopRtClient()
+  }
+  return { ok: true }
+})
+ipcMain.handle('rt:getStatus', () => {
+  const p = getAllParametres()
+  return {
+    role: p.reseau_role ?? 'none',
+    ip: p.reseau_serveur_ip ?? '',
+    port: p.reseau_serveur_port ?? '7890',
+    online: isRtOnline(),
+    serverRunning: !!(syncHttpServer && syncHttpServer.listening),
+    localIp: (() => { try { const { networkInterfaces } = require('os'); for (const n of Object.values(networkInterfaces())) { for (const net of (n as any[]) ?? []) { if (net.family === 'IPv4' && !net.internal) return net.address } } } catch {} return '127.0.0.1' })(),
+    queue: 0
+  }
 })
 
 // ─── WhatsApp ─────────────────────────────────────────────────────────────────

@@ -3,9 +3,10 @@ import {
   syncGetPeers, syncCreatePeer, syncDeletePeer,
   syncPushTo, syncPullFrom,
   syncStartServer, syncStopServer, syncIsRunning, syncGetLocalIp,
-  syncGetJournal, syncSetAutoInterval, getParametres
+  syncGetJournal, syncSetAutoInterval, getParametres,
+  rtSetRole, rtGetStatus
 } from '@/lib/ipc'
-import { RefreshCw, Plus, Trash2, Upload, Download, Wifi, WifiOff, Globe, X, Check, AlertCircle } from 'lucide-react'
+import { RefreshCw, Plus, Trash2, Upload, Download, Wifi, WifiOff, Globe, X, Check, AlertCircle, Server, Monitor, Network, Loader } from 'lucide-react'
 
 interface Peer { id: number; nom: string; ip: string; port: number; last_sync?: string; last_sync_boutique_id?: number }
 interface SyncResult { ok: boolean; pushed?: number; received?: number; applied?: number; errors?: string[]; error?: string; message?: string }
@@ -26,21 +27,55 @@ export default function Sync() {
   const [autoSaving, setAutoSaving] = useState(false)
   const [autoMsg, setAutoMsg] = useState('')
 
+  // Mode réseau client-serveur
+  const [rtRole, setRtRole] = useState('none')
+  const [rtIp, setRtIp] = useState('')
+  const [rtPort, setRtPort] = useState(7890)
+  const [rtStatus, setRtStatus] = useState<any>(null)
+  const [rtSaving, setRtSaving] = useState(false)
+  const [rtMsg, setRtMsg] = useState('')
+  const [rtTesting, setRtTesting] = useState(false)
+
   const load = async () => {
     setLoading(true)
     try {
-      const [p, isOn, ip, j, params] = await Promise.all([
-        syncGetPeers(), syncIsRunning(), syncGetLocalIp(), syncGetJournal(), getParametres()
+      const [p, isOn, ip, j, params, st] = await Promise.all([
+        syncGetPeers(), syncIsRunning(), syncGetLocalIp(), syncGetJournal(), getParametres(), rtGetStatus()
       ])
       setPeers(p as Peer[])
       setServerOn(isOn)
       setLocalIp(ip)
       setJournal((j as any[]).slice(-50).reverse())
       if (params && params.sync_auto_interval_min) setAutoMin(String(params.sync_auto_interval_min))
+      if (st) {
+        setRtRole(st.role ?? 'none')
+        setRtIp(st.ip ?? '')
+        setRtPort(Number(st.port ?? 7890))
+        setRtStatus(st)
+      }
     } catch {}
     setLoading(false)
   }
   useEffect(() => { load() }, [])
+
+  const handleRtSave = async () => {
+    setRtSaving(true)
+    setRtMsg('')
+    const r = await rtSetRole(rtRole, rtRole === 'client' ? rtIp : undefined, rtPort)
+    setRtSaving(false)
+    if (r?.ok) { setRtMsg('Configuration réseau enregistrée'); load() }
+    else setRtMsg(r?.error || 'Erreur d\'enregistrement')
+  }
+
+  const handleRtTest = async () => {
+    setRtTesting(true)
+    setRtMsg('')
+    // Le test passe par un refresh du catalogue (réflexe connexion)
+    const r = await rtGetStatus()
+    setRtTesting(false)
+    load()
+    setRtMsg('')
+  }
 
   const handleSaveAuto = async () => {
     const min = parseInt(autoMin, 10)
@@ -113,6 +148,87 @@ export default function Sync() {
         <button onClick={load} className="p-2 text-gray-400 hover:text-gray-600 rounded-xl hover:bg-gray-100">
           <RefreshCw size={16} />
         </button>
+      </div>
+
+      {/* Mode réseau (stock partagé temps réel) */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+          <h2 className="font-bold text-gray-800 flex items-center gap-2">
+            <Network size={16} className="text-indigo-600" /> Mode réseau — stock partagé temps réel
+          </h2>
+        </div>
+        <p className="text-sm text-gray-400 mb-4">
+          Faites tourner <b>plusieurs caisses</b> du même magasin sur un <b>stock commun</b> en temps réel.
+          La <b>1ʳᵉ caisse</b> devient le <b>serveur central</b> (elle continue d'encaisser normalement).
+          Les <b>caisses suivantes</b> se connectent en client et partagent le même stock et le même catalogue.
+        </p>
+
+        <div className="grid md:grid-cols-3 gap-3 mb-4">
+          {[
+            { val: 'none', icon: Monitor, label: 'Caisse simple', desc: 'Aucun partage (1 seule caisse). Mode par défaut.' },
+            { val: 'serveur', icon: Server, label: 'Serveur (1ʳᵉ caisse)', desc: 'Héberge le stock + catalogue. Continue d\'encaisser.' },
+            { val: 'client', icon: Globe, label: 'Client (caisse suivante)', desc: 'Se connecte au serveur pour partager le stock.' },
+          ].map(opt => {
+            const Icon = opt.icon
+            const active = rtRole === opt.val
+            return (
+              <button key={opt.val} onClick={() => { setRtRole(opt.val); if (opt.val !== 'client') setRtMsg('') }}
+                className={`rounded-xl border-2 p-4 text-left transition-all ${active ? 'border-indigo-500 bg-indigo-50' : 'border-gray-100 hover:border-gray-200 bg-gray-50/50'}`}>
+                <div className={`flex items-center gap-2 font-semibold text-sm ${active ? 'text-indigo-700' : 'text-gray-700'}`}>
+                  <Icon size={16} /> {opt.label}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">{opt.desc}</div>
+              </button>
+            )
+          })}
+        </div>
+
+        {rtRole === 'client' && (
+          <div className="bg-indigo-50/60 rounded-xl p-4 mb-4 border border-indigo-100">
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="col-span-2">
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Adresse IP du serveur (1ʳᵉ caisse)</label>
+                <input value={rtIp} onChange={e => setRtIp(e.target.value)} placeholder="ex : 192.168.1.10"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                <p className="text-xs text-gray-400 mt-1">L'IP s'affiche sur l'écran du serveur dans ce même menu.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Port</label>
+                <input type="number" value={rtPort} onChange={e => setRtPort(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {rtStatus && (rtRole === 'serveur' || (rtRole === 'client' && rtStatus.online)) && (
+          <div className="mb-4 text-xs rounded-lg px-3 py-2 bg-emerald-50 text-emerald-700 flex items-center gap-2">
+            <Check size={14} />
+            {rtRole === 'serveur'
+              ? `Serveur prêt — adresse : http://${rtStatus.localIp}:${rtPort} (stock + catalogue partagés)`
+              : 'Connecté au serveur — stock partagé actif'}
+          </div>
+        )}
+        {rtRole === 'client' && rtStatus && !rtStatus.online && (
+          <div className="mb-4 text-xs rounded-lg px-3 py-2 bg-amber-50 text-amber-700 flex items-center gap-2">
+            <AlertCircle size={14} />
+            Serveur injoignable — mode dégradé : vous pouvez encaisser, le stock sera réconcilié quand le serveur revient.
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <button onClick={handleRtSave} disabled={rtSaving || (rtRole === 'client' && !rtIp.trim())}
+            className="px-4 py-2 rounded-xl font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">
+            {rtSaving ? 'Enregistrement...' : 'Activer ce mode'}
+          </button>
+          <button onClick={load}
+            className="px-4 py-2 rounded-xl font-semibold text-sm border border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center gap-1.5">
+            <RefreshCw size={14} /> Rafraîchir
+          </button>
+          <span className="text-xs text-gray-400">Étape : 1ʳᵉ caisse = Serveur, puis les autres = Client avec son IP.</span>
+        </div>
+        {rtMsg && <p className="text-xs text-indigo-700 mt-2">{rtMsg}</p>}
       </div>
 
       {/* Statut serveur */}

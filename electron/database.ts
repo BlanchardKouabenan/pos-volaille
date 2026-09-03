@@ -1047,6 +1047,10 @@ function seedData() {
     ['notif_rapport', '1'],
     // Exécution planifiée des alertes auto (0 = désactivé, sinon minutes)
     ['alerte_auto_interval_min', '30'],
+    // Mode réseau client-serveur : 'none' (par défaut) | 'serveur' | 'client'
+    ['reseau_role', 'none'],
+    ['reseau_serveur_ip', ''],
+    ['reseau_serveur_port', '7890'],
   ]
   for (const [cle, valeur] of defaults) {
     db.run('INSERT OR IGNORE INTO parametres (cle, valeur) VALUES (?, ?)', [cle, valeur])
@@ -1321,6 +1325,118 @@ export function createVente(data: {
 
   saveDb()
   return { venteId, ticket }
+}
+
+// ─── MODE CLIENT-SERVEUR (stock partagé temps réel) ───────────────────────────
+// Côté serveur central : décrémente le stock de façon atomique pour les caisses
+// clientes. Réutilise la même logique que createVente (variantes, mouvements, résync).
+export function checkRemoteStocks(items: { produit_id?: number; variante_id?: number; code_barre?: string }[]) {
+  const out: { produit_id: number | null; variante_id?: number; code_barre?: string; disponible: boolean; dispo: number }[] = []
+  for (const it of items) {
+    let dispo = 0
+    let pid: number | null = it.produit_id ?? null
+    if (it.variante_id) {
+      const v = queryOne('SELECT stock, produit_id FROM variantes_produit WHERE id = ?', [it.variante_id])
+      dispo = Number(v?.stock ?? 0); pid = v?.produit_id ?? pid
+    } else if (it.code_barre) {
+      const p = queryOne('SELECT id, stock_actuel FROM produits WHERE code_barre = ?', [it.code_barre])
+      pid = p?.id ?? null; dispo = Number(p?.stock_actuel ?? 0)
+    } else if (it.produit_id) {
+      const p = queryOne('SELECT stock_actuel FROM produits WHERE id = ?', [it.produit_id])
+      dispo = Number(p?.stock_actuel ?? 0)
+    }
+    out.push({ produit_id: pid, variante_id: it.variante_id, code_barre: it.code_barre, disponible: dispo > 0, dispo })
+  }
+  return out
+}
+
+export function applyRemoteVenteStock(items: { produit_id?: number; quantite: number; variante_id?: number; code_barre?: string; nom_libre?: string }[], caissierId: number, ticketLabel: string) {
+  const produitsVariants = new Set<number>()
+  let ok = true
+  const insuffisants: { produit_id?: number | null; code_barre?: string; nom_libre?: string }[] = []
+  for (const it of items) {
+    // Vente libre : aucun stock à décrémenter
+    if (it.nom_libre || it.produit_id === 99999998) continue
+    // Résolution de l'id serveur par code-barres (référence partagée client/serveur)
+    let pid: number | null = it.produit_id ?? null
+    if (!pid && it.code_barre) {
+      const p = queryOne('SELECT id FROM produits WHERE code_barre = ?', [it.code_barre])
+      pid = p?.id ?? null
+    }
+    if (!pid) continue
+    const id = pid as number
+    if (it.variante_id) {
+      const v = queryOne('SELECT stock FROM variantes_produit WHERE id = ?', [it.variante_id])
+      if (Number(v?.stock ?? 0) < Number(it.quantite)) { ok = false; insuffisants.push({ produit_id: id }); continue }
+      db.run('UPDATE variantes_produit SET stock = MAX(0, stock - ?) WHERE id = ?', [it.quantite, it.variante_id])
+      produitsVariants.add(id)
+    } else {
+      const p = queryOne('SELECT stock_actuel FROM produits WHERE id = ?', [id])
+      if (Number(p?.stock_actuel ?? 0) < Number(it.quantite)) { ok = false; insuffisants.push({ produit_id: id, nom_libre: it.nom_libre }); continue }
+      db.run('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?', [it.quantite, id])
+    }
+    db.run('INSERT INTO mouvements_stock (produit_id, type, quantite, raison, user_id) VALUES (?, ?, ?, ?, ?)',
+      [id, 'sortie', it.quantite, `Vente ${ticketLabel}`, caissierId])
+  }
+  for (const pid2 of produitsVariants) resyncStockProduit(pid2)
+  saveDb()
+  return { ok, insuffisants }
+}
+
+// Récupère l'état temps réel (catalogue + stock) exposé aux caisses clientes.
+export function getRemoteCatalog() {
+  const produits = queryAll(`
+    SELECT p.id, p.nom, p.categorie_id, c.nom as categorie_nom, p.prix_vente, p.prix_achat,
+           p.unite, p.stock_actuel, p.stock_minimum, p.code_barre, p.lot, p.date_peremption
+    FROM produits p LEFT JOIN categories c ON p.categorie_id = c.id
+    WHERE p.actif = 1 ORDER BY p.nom
+  `, [])
+  const variantes = queryAll(`SELECT v.id, v.produit_id, p.code_barre, v.combinaison, v.stock, v.prix_vente, v.prix_achat, v.sku
+    FROM variantes_produit v LEFT JOIN produits p ON p.id = v.produit_id`, [])
+  return { produits, variantes }
+}
+
+export function getRemoteClients() {
+  return queryAll(`SELECT id, nom, telephone, email, points_fidelite, solde_credit FROM clients WHERE actif = 1 ORDER BY nom`, [])
+}
+
+export function getCodeBarreById(id: number): string | null {
+  const p = queryOne('SELECT code_barre FROM produits WHERE id = ?', [id])
+  return p?.code_barre ?? null
+}
+
+// Côté caisse cliente : réplique le catalogue du serveur dans la base locale
+// (miroir par code-barres) pour afficher le même stock/catalogue que le serveur.
+export function syncRemoteCatalog(produits: any[], variantes: any[]) {
+  let ajoutes = 0, majes = 0
+  for (const p of produits ?? []) {
+    if (!p.code_barre) continue
+    const local = queryOne('SELECT id, updated_at FROM produits WHERE code_barre = ?', [p.code_barre])
+    if (local) {
+      db.run(`UPDATE produits SET nom=?, prix_achat=?, stock_actuel=?, stock_minimum=?, categorie_id=?, unite=?, lot=?, date_peremption=? WHERE id=?`,
+        [p.nom, p.prix_achat ?? 0, p.stock_actuel ?? 0, p.stock_minimum ?? 0, p.categorie_id ?? null, p.unite ?? 'kg', p.lot ?? null, p.date_peremption ?? null, local.id])
+      majes++
+    } else {
+      db.run(`INSERT OR IGNORE INTO produits (code_barre, nom, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, categorie_id, lot, date_peremption)
+        VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [p.code_barre, p.nom, p.prix_vente ?? 0, p.prix_achat ?? 0, p.unite ?? 'kg', p.stock_actuel ?? 0, p.stock_minimum ?? 0, p.categorie_id ?? null, p.lot ?? null, p.date_peremption ?? null])
+      ajoutes++
+    }
+  }
+  // Miroir simplifié des variantes (par combinaison JSON) pour rester cohérent
+  for (const v of variantes ?? []) {
+    const prod = queryOne('SELECT id FROM produits WHERE code_barre = ?', [v.code_barre])
+    if (!prod) continue
+    const existing = queryOne('SELECT id FROM variantes_produit WHERE produit_id = ? AND combinaison = ?', [prod.id, v.combinaison])
+    if (existing) {
+      db.run('UPDATE variantes_produit SET stock=?, prix_vente=? WHERE id=?', [v.stock ?? 0, v.prix_vente ?? null, existing.id])
+    } else {
+      db.run('INSERT INTO variantes_produit (produit_id, combinaison, stock, prix_vente, prix_achat, sku) VALUES (?,?,?,?,?,?)',
+        [prod.id, v.combinaison, v.stock ?? 0, v.prix_vente ?? null, v.prix_achat ?? null, v.sku ?? null])
+    }
+  }
+  saveDb()
+  return { ajoutes, majes }
 }
 
 export function getVentes(dateDebut?: string, dateFin?: string, limit = 200) {

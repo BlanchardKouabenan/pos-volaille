@@ -370,6 +370,10 @@ export const syncGetJournal = (since?: string): Promise<any[]> => api().sync.get
 export const syncPushTo = (peerId: number, ip: string, port: number): Promise<any> => api().sync.pushTo(peerId, ip, port)
 export const syncPullFrom = (peerId: number, ip: string, port: number): Promise<any> => api().sync.pullFrom(peerId, ip, port)
 export const syncSetAutoInterval = (minutes: number): Promise<any> => api().sync.setAutoInterval(minutes)
+
+// ─── Mode client-serveur (stock partagé temps réel) ───────────────────────────
+export const rtSetRole = (role: string, ip?: string, port?: number): Promise<any> => api().rt.setRole(role, ip, port)
+export const rtGetStatus = (): Promise<any> => api().rt.getStatus()
 export const whatsappOpenTicket = (phone: string, message: string): Promise<any> => api().whatsapp.openTicket(phone, message)
 
 // ─── Sprint 9 — Client 360° & Campagnes ───────────────────────────────────────

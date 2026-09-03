@@ -284,6 +284,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pullFrom: (peerId: number, ip: string, port: number) => ipcRenderer.invoke('sync:pullFrom', peerId, ip, port),
     setAutoInterval: (minutes: number) => ipcRenderer.invoke('sync:setAutoInterval', minutes),
   },
+  rt: {
+    setRole: (role: string, ip?: string, port?: number) => ipcRenderer.invoke('rt:setRole', role, ip, port),
+    getStatus: () => ipcRenderer.invoke('rt:getStatus'),
+  },
   whatsapp: {
     openTicket: (phone: string, message: string) => ipcRenderer.invoke('whatsapp:openTicket', phone, message),
   },
