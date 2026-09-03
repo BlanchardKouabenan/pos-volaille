@@ -8,13 +8,14 @@ import { getParametres, setParametres, getUsers, createUser, updateUser, deleteU
   listeImprimantes, testImprimante,
   emailRestartScheduler, emailEnvoyerHoraire, emailTestConfig, emailGetJournal,
   forfaitGet, forfaitProlonger, forfaitGenererLicence, forfaitAppliquerLicence,
-  appGetVersion, appCheckForUpdates, appQuitAndInstall, appOnUpdateStatus } from '@/lib/ipc'
+  appGetVersion, appCheckForUpdates, appQuitAndInstall, appOnUpdateStatus,
+  notifConfigure, cloudTest, cloudUploadNow, cloudList } from '@/lib/ipc'
 import { useAuthStore } from '@/store/authStore'
 import { useProfilStore } from '@/store/profilStore'
 import type { User, UserRole, CodeSuperviseur, ProfilListEntry, ProfilModule } from '@/types'
 import { Settings, Users, Printer, Building, Save, Plus, Edit2, Trash2, X, Check,
   Eye, EyeOff, Shield, Clock, Smartphone, HardDrive, FolderOpen, RefreshCw, Download, Scale, Wifi, WifiOff,
-  RotateCcw, AlertTriangle, Store, BadgeCheck, Sparkles, Mail, Send, Lock, CalendarClock, KeyRound, Upload } from 'lucide-react'
+  RotateCcw, AlertTriangle, Store, BadgeCheck, Sparkles, Mail, Send, Lock, CalendarClock, KeyRound, Upload, Bell } from 'lucide-react'
 
 type Tab = 'entreprise' | 'commerce' | 'ticket' | 'imprimante' | 'utilisateurs' | 'superviseur' | 'session' | 'sms' | 'email' | 'sauvegardes' | 'balance' | 'forfait'
 
@@ -92,8 +93,12 @@ export default function Parametres() {
   // Backup state
   const [backups, setBackups] = useState<{ filename: string; size: number; date: string; path: string }[]>([])
   const [backupLoading, setBackupLoading] = useState(false)
-  const [backupMsg, setBackupMsg] = useState('')
-  const [backupError, setBackupError] = useState('')
+const [backupMsg, setBackupMsg] = useState('')
+const [backupError, setBackupError] = useState('')
+const [cloudBusy, setCloudBusy] = useState(false)
+const [cloudMsg, setCloudMsg] = useState('')
+const [cloudError, setCloudError] = useState('')
+const [cloudFiles, setCloudFiles] = useState<string[]>([])
 
   // Balance
   const [portsCOM, setPortsCOM] = useState<string[]>([])
@@ -227,6 +232,15 @@ const [licenceToken, setLicenceToken] = useState('')
     try {
       await setParametres(params)
       try { await emailRestartScheduler() } catch {}
+      try {
+        await notifConfigure({
+          vente: (params.notif_vente ?? '1') !== '0',
+          stock: (params.notif_stock ?? '1') !== '0',
+          ardoise: (params.notif_ardoise ?? '1') !== '0',
+          fidelite: (params.notif_fidelite ?? '1') !== '0',
+          rapport: (params.notif_rapport ?? '1') !== '0'
+        })
+      } catch {}
       setSaved(true)
       setTimeout(() => setSaved(false), 2500)
     } catch {}
@@ -359,8 +373,34 @@ const [licenceToken, setLicenceToken] = useState('')
     setTimeout(() => setSaved(false), 2500)
   }
 
+  const handleCloudTest = async () => {
+    setCloudBusy(true); setCloudMsg(''); setCloudError('')
+    try {
+      const r = await cloudTest()
+      if (r.success) setCloudMsg('Connexion WebDAV réussie ✅'); else setCloudError(r.error || 'Échec')
+    } catch (e: any) { setCloudError(e.message) }
+    setCloudBusy(false)
+  }
+
+  const handleCloudUploadNow = async () => {
+    setCloudBusy(true); setCloudMsg(''); setCloudError('')
+    try {
+      const r = await cloudUploadNow('cloud')
+      if (r.success) { setCloudMsg('Backup envoyé au cloud ✅'); loadCloudFiles() }
+      else setCloudError(r.error || 'Échec de l\'upload')
+    } catch (e: any) { setCloudError(e.message) }
+    setCloudBusy(false)
+  }
+
+  const loadCloudFiles = async () => {
+    try {
+      const r = await cloudList()
+      if (r.success && r.files) setCloudFiles(r.files)
+    } catch {}
+  }
+
   useEffect(() => {
-    if (tab === 'sauvegardes') loadBackups()
+    if (tab === 'sauvegardes') { loadBackups(); loadCloudFiles() }
     if (tab === 'balance') {
       balanceGetPortsCOM().then(setPortsCOM).catch(() => {})
       balanceIsConnected().then(setBalanceConnected).catch(() => {})
@@ -1317,6 +1357,78 @@ const [licenceToken, setLicenceToken] = useState('')
               </div>
             </div>
 
+            {/* Notifications desktop */}
+            <div className="bg-white rounded-2xl shadow-card p-6 space-y-3">
+              <div className="flex items-center gap-3">
+                <Bell size={18} className="text-indigo-500" />
+                <h2 className="font-bold text-gray-800 text-lg">Notifications desktop</h2>
+              </div>
+              <p className="text-xs text-gray-400">Popups natives du système pour vous alerter en temps réel (même si l'application est en arrière-plan).</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">Ventes en temps réel</label>
+                  <p className="text-xs text-gray-400">À chaque vente enregistrée.</p>
+                </div>
+                <select value={params.notif_vente ?? '1'}
+                  onChange={e => setParams(p => ({ ...p, notif_vente: e.target.value }))}
+                  className="input-field w-32">
+                  <option value="1">Activé</option>
+                  <option value="0">Désactivé</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">Stock faible</label>
+                  <p className="text-xs text-gray-400">Produit sous son seuil minimum.</p>
+                </div>
+                <select value={params.notif_stock ?? '1'}
+                  onChange={e => setParams(p => ({ ...p, notif_stock: e.target.value }))}
+                  className="input-field w-32">
+                  <option value="1">Activé</option>
+                  <option value="0">Désactivé</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">Ardoises anciennes</label>
+                  <p className="text-xs text-gray-400">Crédit client resté impayé trop longtemps.</p>
+                </div>
+                <select value={params.notif_ardoise ?? '1'}
+                  onChange={e => setParams(p => ({ ...p, notif_ardoise: e.target.value }))}
+                  className="input-field w-32">
+                  <option value="1">Activé</option>
+                  <option value="0">Désactivé</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">Fidélité</label>
+                  <p className="text-xs text-gray-400">Client ayant atteint un palier de points.</p>
+                </div>
+                <select value={params.notif_fidelite ?? '1'}
+                  onChange={e => setParams(p => ({ ...p, notif_fidelite: e.target.value }))}
+                  className="input-field w-32">
+                  <option value="1">Activé</option>
+                  <option value="0">Désactivé</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-semibold text-gray-700">Rapports / forfait</label>
+                  <p className="text-xs text-gray-400">Alerte d'expiration du forfait, rappels.</p>
+                </div>
+                <select value={params.notif_rapport ?? '1'}
+                  onChange={e => setParams(p => ({ ...p, notif_rapport: e.target.value }))}
+                  className="input-field w-32">
+                  <option value="1">Activé</option>
+                  <option value="0">Désactivé</option>
+                </select>
+              </div>
+              <div className="pt-3 border-t border-gray-100">
+                <p className="text-xs text-gray-400">Pensez à cliquer sur « Enregistrer » pour appliquer ces réglages.</p>
+              </div>
+            </div>
+
             {/* Journal des envois */}
             <div className="bg-white rounded-2xl shadow-card p-6 space-y-3">
               <div className="flex items-center justify-between">
@@ -1520,6 +1632,114 @@ const [licenceToken, setLicenceToken] = useState('')
                   <Save size={16} /> Enregistrer les paramètres
                 </button>
               </div>
+            </div>
+
+            {/* Sauvegarde cloud WebDAV */}
+            <div className="bg-white rounded-2xl shadow-card p-6 space-y-4">
+              <h2 className="font-bold text-gray-800 text-lg flex items-center gap-2">
+                <Upload size={20} className="text-indigo-600" /> Sauvegarde cloud (WebDAV)
+              </h2>
+              <p className="text-xs text-gray-400">
+                Envoyez automatiquement vos sauvegardes vers un serveur WebDAV (Nextcloud, ownCloud, ou un dossier
+                synchronisé compatible). Renseignez l'URL, l'utilisateur et le mot de passe, puis activez.
+              </p>
+
+              <div className="flex items-center justify-between pt-1">
+                <div>
+                  <p className="text-sm font-semibold text-gray-700">Activer la sauvegarde cloud</p>
+                  <p className="text-xs text-gray-400">Upload automatique à chaque sauvegarde locale</p>
+                </div>
+                <button
+                  onClick={() => setParams(p => ({ ...p, cloud_backup_actif: p.cloud_backup_actif === '1' ? '0' : '1' }))}
+                  className={`w-12 h-6 rounded-full transition-colors ${params.cloud_backup_actif === '1' ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                >
+                  <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform mx-0.5 ${params.cloud_backup_actif === '1' ? 'translate-x-6' : 'translate-x-0'}`} />
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">URL du serveur WebDAV</label>
+                <input
+                  type="text"
+                  placeholder="https://nextcloud.example.com/remote.php/dav/files/user"
+                  value={params.cloud_backup_url || ''}
+                  onChange={e => setParams(p => ({ ...p, cloud_backup_url: e.target.value }))}
+                  className="input-field"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Utilisateur</label>
+                  <input
+                    type="text"
+                    value={params.cloud_backup_user || ''}
+                    onChange={e => setParams(p => ({ ...p, cloud_backup_user: e.target.value }))}
+                    className="input-field"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Mot de passe</label>
+                  <input
+                    type="password"
+                    value={params.cloud_backup_pass || ''}
+                    onChange={e => setParams(p => ({ ...p, cloud_backup_pass: e.target.value }))}
+                    className="input-field"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Dossier distant (sous-dossier)</label>
+                <input
+                  type="text"
+                  placeholder="kb-pos"
+                  value={params.cloud_backup_dossier || 'kb-pos'}
+                  onChange={e => setParams(p => ({ ...p, cloud_backup_dossier: e.target.value }))}
+                  className="input-field"
+                />
+              </div>
+
+              {cloudMsg && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-2 rounded-xl text-sm flex items-center gap-2">
+                  <Check size={14} /> {cloudMsg}
+                </div>
+              )}
+              {cloudError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-xl text-sm">⚠ {cloudError}</div>
+              )}
+
+              <div className="flex flex-wrap gap-3 pt-1">
+                <button
+                  onClick={handleSaveBackupSettings}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition-colors"
+                >
+                  <Save size={16} /> Enregistrer les paramètres
+                </button>
+                <button
+                  onClick={handleCloudTest}
+                  disabled={cloudBusy}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50"
+                >
+                  <Wifi size={16} /> {cloudBusy ? 'Test...' : 'Tester la connexion'}
+                </button>
+                <button
+                  onClick={handleCloudUploadNow}
+                  disabled={cloudBusy}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50"
+                >
+                  <Upload size={16} /> {cloudBusy ? 'Envoi...' : 'Uploader maintenant'}
+                </button>
+              </div>
+
+              {cloudFiles.length > 0 && (
+                <div>
+                  <p className="text-sm font-semibold text-gray-700 mb-2">Fichiers dans le cloud ({cloudFiles.length})</p>
+                  <div className="max-h-32 overflow-y-auto divide-y divide-gray-50 rounded-xl border border-gray-100">
+                    {cloudFiles.map((f, i) => (
+                      <div key={i} className="px-3 py-1.5 text-xs text-gray-600 font-mono">{f}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Sauvegarde manuelle */}

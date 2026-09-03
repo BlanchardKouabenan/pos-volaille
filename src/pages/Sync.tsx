@@ -3,7 +3,7 @@ import {
   syncGetPeers, syncCreatePeer, syncDeletePeer,
   syncPushTo, syncPullFrom,
   syncStartServer, syncStopServer, syncIsRunning, syncGetLocalIp,
-  syncGetJournal
+  syncGetJournal, syncSetAutoInterval, getParametres
 } from '@/lib/ipc'
 import { RefreshCw, Plus, Trash2, Upload, Download, Wifi, WifiOff, Globe, X, Check, AlertCircle } from 'lucide-react'
 
@@ -22,21 +22,35 @@ export default function Sync() {
   const [showAddPeer, setShowAddPeer] = useState(false)
   const [newPeer, setNewPeer] = useState({ nom: '', ip: '', port: 7890 })
   const [toggling, setToggling] = useState(false)
+  const [autoMin, setAutoMin] = useState('0')
+  const [autoSaving, setAutoSaving] = useState(false)
+  const [autoMsg, setAutoMsg] = useState('')
 
   const load = async () => {
     setLoading(true)
     try {
-      const [p, isOn, ip, j] = await Promise.all([
-        syncGetPeers(), syncIsRunning(), syncGetLocalIp(), syncGetJournal()
+      const [p, isOn, ip, j, params] = await Promise.all([
+        syncGetPeers(), syncIsRunning(), syncGetLocalIp(), syncGetJournal(), getParametres()
       ])
       setPeers(p as Peer[])
       setServerOn(isOn)
       setLocalIp(ip)
       setJournal((j as any[]).slice(-50).reverse())
+      if (params && params.sync_auto_interval_min) setAutoMin(String(params.sync_auto_interval_min))
     } catch {}
     setLoading(false)
   }
   useEffect(() => { load() }, [])
+
+  const handleSaveAuto = async () => {
+    const min = parseInt(autoMin, 10)
+    if (isNaN(min) || min < 0) { setAutoMsg('Intervalle invalide'); return }
+    setAutoSaving(true)
+    setAutoMsg('')
+    const r = await syncSetAutoInterval(min)
+    setAutoSaving(false)
+    setAutoMsg(r?.ok ? (min > 0 ? `Sync automatique activé : toutes les ${min} min` : 'Sync automatique désactivé') : 'Erreur d\'enregistrement')
+  }
 
   const toggleServer = async () => {
     setToggling(true)
@@ -129,6 +143,37 @@ export default function Sync() {
             {toggling ? '...' : serverOn ? 'Arrêter' : 'Démarrer'}
           </button>
         </div>
+      </div>
+
+      {/* Sync automatique */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <h2 className="font-bold text-gray-800 mb-1 flex items-center gap-2">
+          <RefreshCw size={16} className="text-teal-600" /> Synchronisation automatique
+        </h2>
+        <p className="text-sm text-gray-400 mb-4">
+          Pousse et récupère automatiquement les ventes vers toutes les boutiques distantes à intervalle régulier.
+          Les changements sont mis en attente si le réseau est coupé et réconciliés dès que possible.
+        </p>
+        <div className="flex items-end gap-3">
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Intervalle (minutes)</label>
+            <input
+              type="number" min="0" max="1440" step="1"
+              value={autoMin}
+              onChange={e => setAutoMin(e.target.value)}
+              className="w-40 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-1">0 = désactivé</p>
+          </div>
+          <button
+            onClick={handleSaveAuto}
+            disabled={autoSaving}
+            className="px-4 py-2 rounded-xl font-semibold text-sm bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50"
+          >
+            {autoSaving ? 'Enregistrement...' : 'Enregistrer'}
+          </button>
+        </div>
+        {autoMsg && <p className="text-xs text-teal-700 mt-2">{autoMsg}</p>}
       </div>
 
       {/* Points de sync (peers) */}

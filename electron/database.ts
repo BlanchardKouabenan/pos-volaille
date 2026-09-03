@@ -1031,6 +1031,20 @@ function seedData() {
     ['backup_interval_h', '24'],
     ['backup_max_count', '30'],
     ['backup_dir', ''],
+    // Sauvegarde cloud WebDAV
+    ['cloud_backup_actif', '0'],
+    ['cloud_backup_url', ''],
+    ['cloud_backup_user', ''],
+    ['cloud_backup_pass', ''],
+    ['cloud_backup_dossier', 'kb-pos'],
+    // Auto-sync inter-boutiques (0 = désactivé)
+    ['sync_auto_interval_min', '0'],
+    // Notifications desktop
+    ['notif_vente', '1'],
+    ['notif_stock', '1'],
+    ['notif_ardoise', '1'],
+    ['notif_fidelite', '1'],
+    ['notif_rapport', '1'],
   ]
   for (const [cle, valeur] of defaults) {
     db.run('INSERT OR IGNORE INTO parametres (cle, valeur) VALUES (?, ?)', [cle, valeur])

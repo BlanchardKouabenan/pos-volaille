@@ -60,6 +60,8 @@ import { printReceipt, generateReceiptText, openCashDrawer, buildPrinterInterfac
 import { sendSms, formatSmsTicket } from './sms'
 import { envoyerFondCaisseCloture, envoyerPointVenteHoraire, envoyerControleReleve, envoyerAlerteForfait, envoyerTestEmail, envoyerResumeJournalier, envoyerEtatInventaire, envoyerAlertesStock } from './reports'
 import { getForfaitInfo, prolongerForfaitLocal, appliquerLicence, genererLicence } from './license'
+import { notifyDesktop, configureNotifications, notifyStock, notifyVente } from './notifications'
+import { uploadLocalFile, ensureRemoteDir, listRemoteDir } from './webdav'
 
 // ─── MISE À JOUR AUTOMATIQUE ──────────────────────────────────────────────────
 import { autoUpdater } from 'electron-updater'
@@ -167,6 +169,67 @@ function createWindow() {
 // ─── AUTO-BACKUP SCHEDULER ────────────────────────────────────────────────────
 let autoBackupInterval: NodeJS.Timeout | null = null
 
+// ─── SAUVEGARDE CLOUD (WebDAV) ────────────────────────────────────────────────
+function getCloudConfig() {
+  const p = getAllParametres()
+  return {
+    actif: p.cloud_backup_actif === '1',
+    url: p.cloud_backup_url || '',
+    username: p.cloud_backup_user || '',
+    password: p.cloud_backup_pass || '',
+    dossier: p.cloud_backup_dossier || 'kb-pos'
+  }
+}
+
+async function uploadLatestBackupToCloud() {
+  const cfg = getCloudConfig()
+  if (!cfg.actif || !cfg.url) return
+  if (!cfg.username || !cfg.password) return
+  try {
+    const backups = listBackups()
+    if (!backups || backups.length === 0) return
+    const latest = backups[0] // plus récent en premier
+    const localPath = path.join(getBackupDirPath(), latest.filename)
+    const res = await uploadLocalFile(
+      { url: cfg.url, username: cfg.username, password: cfg.password },
+      localPath,
+      latest.filename,
+      cfg.dossier
+    )
+    if (!res.success) notifyDesktop('rapport', 'Sauvegarde cloud', `Échec de l'upload : ${res.error}`)
+  } catch {}
+}
+
+async function testCloudConnection() {
+  const cfg = getCloudConfig()
+  if (!cfg.url) return { success: false, error: 'URL WebDAV manquante' }
+  try {
+    await ensureRemoteDir({ url: cfg.url, username: cfg.username, password: cfg.password }, cfg.dossier)
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+}
+
+async function uploadCloudNow(label = 'manuel') {
+  const cfg = getCloudConfig()
+  if (!cfg.url) return { success: false, error: 'URL WebDAV manquante' }
+  const result = createBackup(label)
+  if (!result.success || !result.filename) return { success: false, error: result.error || 'Création du backup local échouée' }
+  try {
+    const localPath = path.join(getBackupDirPath(), result.filename)
+    const res = await uploadLocalFile(
+      { url: cfg.url, username: cfg.username, password: cfg.password },
+      localPath,
+      result.filename,
+      cfg.dossier
+    )
+    return res
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+}
+
 function startAutoBackup() {
   if (autoBackupInterval) clearInterval(autoBackupInterval)
   const params = getAllParametres()
@@ -184,6 +247,7 @@ function startAutoBackup() {
         if (result.success) {
           const maxDays = parseInt(p.backup_max_count || '30', 10)
           if (maxDays > 0) purgeOldBackups(maxDays)
+          uploadLatestBackupToCloud().catch(() => {})
         }
       }
       // Sauvegarde mensuelle automatique : une par mois (label "mensuel", conservées à vie)
@@ -220,6 +284,7 @@ function startEmailScheduler() {
   if (forfaitAlertInterval) clearInterval(forfaitAlertInterval)
   forfaitAlertInterval = setInterval(() => {
     envoyerAlerteForfait().catch(() => {})
+    notifyRapportCheck()
   }, 60 * 60 * 1000)
   // Alerte stock minimum au démarrage (1 mail / jour max)
   envoyerAlertesStock().catch(() => {})
@@ -227,6 +292,95 @@ function startEmailScheduler() {
 
 let forfaitAlertInterval: NodeJS.Timeout | null = null
 
+// ─── NOTIFICATIONS DESKTOP (déclencheurs) ────────────────────────────────────
+function notifyAlertResults(details: string[]) {
+  if (!details || details.length === 0) return
+  for (const d of details.slice(0, 5)) {
+    if (d.startsWith('Stock faible'))
+      notifyStock('Stock faible', d)
+    else if (d.startsWith('Ardoise'))
+      notifyDesktop('ardoise', 'Ardoise ancienne', d)
+    else if (d.startsWith('Fidélité'))
+      notifyDesktop('fidelite', 'Fidélité', d)
+  }
+}
+
+function notifyRapportCheck() {
+  try {
+    const info = getForfaitInfo()
+    if (!info || !info.expiration) return
+    const days = info.joursRestants
+    if (info.expire) {
+      notifyDesktop('rapport', 'Forfait expiré', `Le forfait est arrivé à expiration le ${info.expiration}.`)
+    } else if (days <= 5 && days >= 0) {
+      notifyDesktop('rapport', 'Alerte forfait', `Le forfait expire dans ${days} jour(s) (le ${info.expiration}).`)
+    }
+  } catch {}
+}
+
+// ─── AUTO-SYNC INTER-BOUTIQUES ────────────────────────────────────────────────
+async function doPushSync(peerId: number, ip: string, port: number) {
+  try {
+    const peer = getSyncPeers().find((p: any) => p.id === peerId)
+    const lastSync = peer?.last_sync ?? undefined
+    const boutiqueId = Number(getAllParametres()?.boutique_id_local ?? 1)
+    const changes = getSyncJournal(lastSync)
+    if (!changes.length) {
+      updateSyncPeerLastSync(peerId, boutiqueId)
+      return { ok: true, pushed: 0, message: 'Rien à envoyer' }
+    }
+    const resp = await fetch(`http://${ip}:${port}/api/sync/push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ changes }),
+      signal: AbortSignal.timeout(10000)
+    })
+    const result = await resp.json()
+    if (result.ok) {
+      markSyncedIds(changes.map((c: any) => c.id))
+      updateSyncPeerLastSync(peerId, boutiqueId)
+    }
+    return { ok: result.ok, pushed: changes.length, applied: result.applied, errors: result.errors }
+  } catch (e: any) { return { ok: false, error: e.message } }
+}
+
+async function doPullSync(peerId: number, ip: string, port: number) {
+  try {
+    const peer = getSyncPeers().find((p: any) => p.id === peerId)
+    const lastSync = peer?.last_sync ?? undefined
+    const url = `http://${ip}:${port}/api/sync/pull${lastSync ? `?since=${encodeURIComponent(lastSync)}` : ''}`
+    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) })
+    const result = await resp.json()
+    if (!result.ok) return { ok: false, error: 'Serveur a retourné une erreur' }
+    const r = applySyncChanges(result.changes ?? [])
+    updateSyncPeerLastSync(peerId, 0)
+    return { ok: true, received: result.count, applied: r.applied, errors: r.errors }
+  } catch (e: any) { return { ok: false, error: e.message } }
+}
+
+let autoSyncInterval: NodeJS.Timeout | null = null
+
+function startAutoSync() {
+  if (autoSyncInterval) { clearInterval(autoSyncInterval); autoSyncInterval = null }
+  const minutes = parseInt(getAllParametres()?.sync_auto_interval_min || '0', 10)
+  if (isNaN(minutes) || minutes <= 0) return
+  const run = async () => {
+    try {
+      const peers = getSyncPeers().filter((p: any) => p.actif === 1)
+      if (!peers.length) return
+      for (const peer of peers) {
+        await doPushSync(peer.id, peer.ip, peer.port).catch(() => {})
+        await doPullSync(peer.id, peer.ip, peer.port).catch(() => {})
+      }
+    } catch {}
+  }
+  run()
+  autoSyncInterval = setInterval(run, minutes * 60 * 1000)
+}
+
+function stopAutoSync() {
+  if (autoSyncInterval) { clearInterval(autoSyncInterval); autoSyncInterval = null }
+}
 
 app.whenReady().then(async () => {
   await initDatabase()
@@ -235,8 +389,26 @@ app.whenReady().then(async () => {
   if (params.backup_dir) setBackupDir(params.backup_dir)
   startAutoBackup()
   startEmailScheduler()
-  // Lancer la vérification automatique des alertes au démarrage
-  try { runAlertesAuto() } catch {}
+  startAutoSync()
+  // Configurer les notifications desktop selon les paramètres
+  try {
+    const p = getAllParametres()
+    configureNotifications({
+      vente: p.notif_vente !== '0',
+      stock: p.notif_stock !== '0',
+      ardoise: p.notif_ardoise !== '0',
+      fidelite: p.notif_fidelite !== '0',
+      rapport: p.notif_rapport !== '0'
+    })
+  } catch {}
+
+  // Déclencheur des alertes au démarrage : envoie aussi des notifications desktop
+  try {
+    const result = runAlertesAuto()
+    if (result) {
+      notifyAlertResults(result.details)
+    }
+  } catch {}
   // Supprimer la barre de menu par défaut "File Edit View Window Help"
   // (non adaptée à une caisse POS tactile / plein écran)
   try { Menu.setApplicationMenu(null) } catch {}
@@ -287,7 +459,14 @@ ipcMain.handle('db:addMouvement', (_e, data) => addMouvement(data))
 ipcMain.handle('db:getMouvements', (_e, produitId, limit) => getMouvements(produitId, limit))
 
 // Ventes
-ipcMain.handle('db:createVente', (_e, data) => createVente(data))
+ipcMain.handle('db:createVente', (_e, data) => {
+  const result = createVente(data)
+  try {
+    const montant = result?.total ?? data?.total ?? 0
+    notifyVente('Vente enregistrée', `Vente de ${Number(montant).toLocaleString('fr-FR')} FCFA`)
+  } catch {}
+  return result
+})
 ipcMain.handle('db:getVentes', (_e, dateDebut, dateFin, limit) => getVentes(dateDebut, dateFin, limit))
 ipcMain.handle('db:getVenteById', (_e, id) => getVenteById(id))
 ipcMain.handle('db:getVenteStats', (_e, dateDebut, dateFin) => getVenteStats(dateDebut, dateFin))
@@ -530,6 +709,22 @@ ipcMain.handle('backup:restartScheduler', () => {
   startAutoBackup()
   return { success: true }
 })
+ipcMain.handle('cloud:test', async () => {
+  return testCloudConnection()
+})
+ipcMain.handle('cloud:uploadNow', async (_e, label?: string) => {
+  return uploadCloudNow(label)
+})
+ipcMain.handle('cloud:list', async () => {
+  const cfg = getCloudConfig()
+  if (!cfg.url) return { success: false, error: 'URL WebDAV manquante' }
+  try {
+    const files = await listRemoteDir({ url: cfg.url, username: cfg.username, password: cfg.password }, cfg.dossier)
+    return { success: true, files }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
 
 // ─── EMAIL (envoi du fond de caisse / point de vente) ─────────────────────────
 ipcMain.handle('email:restartScheduler', () => {
@@ -659,6 +854,10 @@ ipcMain.handle('boutique:statsConsolidees', (_e, dateDebut: string, dateFin: str
 ipcMain.handle('alertes:getRegles', () => getAlertesRegles())
 ipcMain.handle('alertes:updateRegle', (_e, id: number, data: any) => updateAlerteRegle(id, data))
 ipcMain.handle('alertes:runAuto', () => runAlertesAuto())
+ipcMain.handle('notif:configure', (_e, enabled: { [K: string]: boolean }) => {
+  configureNotifications(enabled)
+  return true
+})
 
 // ─── IMPORT / EXPORT ──────────────────────────────────────────────────────────
 ipcMain.handle('import:produits', (_e, lignes: any[], userId?: number) => importProduits(lignes, userId))
@@ -921,45 +1120,14 @@ ipcMain.handle('sync:createPeer', (_e, data: any) => createSyncPeer(data))
 ipcMain.handle('sync:deletePeer', (_e, id: number) => deleteSyncPeer(id))
 ipcMain.handle('sync:getJournal', (_e, since?: string) => getSyncJournal(since))
 
-ipcMain.handle('sync:pushTo', async (_e, peerId: number, ip: string, port: number) => {
-  try {
-    const peers = getSyncPeers()
-    const peer = peers.find((p: any) => p.id === peerId)
-    const lastSync = peer?.last_sync ?? undefined
-    const boutiqueId = Number(getAllParametres()?.boutique_id_local ?? 1)
-    const changes = getSyncJournal(lastSync)
-    if (!changes.length) {
-      updateSyncPeerLastSync(peerId, boutiqueId)
-      return { ok: true, pushed: 0, message: 'Rien à envoyer' }
-    }
-    const resp = await fetch(`http://${ip}:${port}/api/sync/push`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ changes }),
-      signal: AbortSignal.timeout(10000)
-    })
-    const result = await resp.json()
-    if (result.ok) {
-      markSyncedIds(changes.map((c: any) => c.id))
-      updateSyncPeerLastSync(peerId, boutiqueId)
-    }
-    return { ok: result.ok, pushed: changes.length, applied: result.applied, errors: result.errors }
-  } catch (e: any) { return { ok: false, error: e.message } }
-})
+ipcMain.handle('sync:pushTo', (_e, peerId: number, ip: string, port: number) => doPushSync(peerId, ip, port))
 
-ipcMain.handle('sync:pullFrom', async (_e, peerId: number, ip: string, port: number) => {
-  try {
-    const peers = getSyncPeers()
-    const peer = peers.find((p: any) => p.id === peerId)
-    const lastSync = peer?.last_sync ?? undefined
-    const url = `http://${ip}:${port}/api/sync/pull${lastSync ? `?since=${encodeURIComponent(lastSync)}` : ''}`
-    const resp = await fetch(url, { signal: AbortSignal.timeout(10000) })
-    const result = await resp.json()
-    if (!result.ok) return { ok: false, error: 'Serveur a retourné une erreur' }
-    const r = applySyncChanges(result.changes ?? [])
-    updateSyncPeerLastSync(peerId, 0)
-    return { ok: true, received: result.count, applied: r.applied, errors: r.errors }
-  } catch (e: any) { return { ok: false, error: e.message } }
+ipcMain.handle('sync:pullFrom', (_e, peerId: number, ip: string, port: number) => doPullSync(peerId, ip, port))
+
+ipcMain.handle('sync:setAutoInterval', (_e, minutes: number) => {
+  setParametre('sync_auto_interval_min', String(minutes))
+  startAutoSync()
+  return { ok: true }
 })
 
 ipcMain.handle('sync:startServer', (_e, port: number) => {

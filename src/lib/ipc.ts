@@ -207,6 +207,11 @@ export const backupBrowseDir = (): Promise<string | null> => api().backup.browse
 export const backupSetDir = (dir: string): Promise<{ success: boolean }> => api().backup.setDir(dir)
 export const backupRestartScheduler = (): Promise<{ success: boolean }> => api().backup.restartScheduler()
 
+// ─── Sauvegarde cloud (WebDAV) ────────────────────────────────────────────────
+export const cloudTest = (): Promise<{ success: boolean; error?: string }> => api().cloud.test()
+export const cloudUploadNow = (label?: string): Promise<{ success: boolean; error?: string }> => api().cloud.uploadNow(label)
+export const cloudList = (): Promise<{ success: boolean; error?: string; files?: string[] }> => api().cloud.list()
+
 // ─── Images produits ──────────────────────────────────────────────────────────
 export const selectImageProduit = (): Promise<string | null> =>
   api().image.selectProduit()
@@ -360,6 +365,7 @@ export const syncDeletePeer = (id: number): Promise<any> => api().sync.deletePee
 export const syncGetJournal = (since?: string): Promise<any[]> => api().sync.getJournal(since)
 export const syncPushTo = (peerId: number, ip: string, port: number): Promise<any> => api().sync.pushTo(peerId, ip, port)
 export const syncPullFrom = (peerId: number, ip: string, port: number): Promise<any> => api().sync.pullFrom(peerId, ip, port)
+export const syncSetAutoInterval = (minutes: number): Promise<any> => api().sync.setAutoInterval(minutes)
 export const whatsappOpenTicket = (phone: string, message: string): Promise<any> => api().whatsapp.openTicket(phone, message)
 
 // ─── Sprint 9 — Client 360° & Campagnes ───────────────────────────────────────
@@ -379,6 +385,7 @@ export const factureUpdateStatut = (id: number, statut: string): Promise<any> =>
 export const financeCompteResultat = (annee: number, mois?: number): Promise<any> => api().finance.compteResultat(annee, mois)
 export const financeRapportTVA = (dateDebut?: string, dateFin?: string): Promise<any> => api().finance.rapportTVA(dateDebut, dateFin)
 export const auditGetLog = (dateDebut?: string, dateFin?: string, entite?: string): Promise<any[]> => api().audit.getLog(dateDebut, dateFin, entite)
+export const notifConfigure = (enabled: { [K: string]: boolean }): Promise<boolean> => api().notifications.configure(enabled)
 
 // ─── Mise à jour automatique ───────────────────────────────────────────────────
 export type UpdateStatus =

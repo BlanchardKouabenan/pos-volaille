@@ -160,6 +160,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setDir: (dir: string) => ipcRenderer.invoke('backup:setDir', dir),
     restartScheduler: () => ipcRenderer.invoke('backup:restartScheduler'),
   },
+  cloud: {
+    test: () => ipcRenderer.invoke('cloud:test'),
+    uploadNow: (label?: string) => ipcRenderer.invoke('cloud:uploadNow', label),
+    list: () => ipcRenderer.invoke('cloud:list'),
+  },
   email: {
     restartScheduler: () => ipcRenderer.invoke('email:restartScheduler'),
     testFondCaisse: () => ipcRenderer.invoke('email:testFondCaisse'),
@@ -237,6 +242,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     updateRegle: (id: number, data: any) => ipcRenderer.invoke('alertes:updateRegle', id, data),
     runAuto: () => ipcRenderer.invoke('alertes:runAuto'),
   },
+  notifications: {
+    configure: (enabled: { [K: string]: boolean }) => ipcRenderer.invoke('notif:configure', enabled),
+  },
   importExport: {
     importProduits: (lignes: any[], userId?: number) => ipcRenderer.invoke('import:produits', lignes, userId),
     importClients: (lignes: any[], userId?: number) => ipcRenderer.invoke('import:clients', lignes, userId),
@@ -271,6 +279,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getJournal: (since?: string) => ipcRenderer.invoke('sync:getJournal', since),
     pushTo: (peerId: number, ip: string, port: number) => ipcRenderer.invoke('sync:pushTo', peerId, ip, port),
     pullFrom: (peerId: number, ip: string, port: number) => ipcRenderer.invoke('sync:pullFrom', peerId, ip, port),
+    setAutoInterval: (minutes: number) => ipcRenderer.invoke('sync:setAutoInterval', minutes),
   },
   whatsapp: {
     openTicket: (phone: string, message: string) => ipcRenderer.invoke('whatsapp:openTicket', phone, message),
