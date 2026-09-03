@@ -4,7 +4,7 @@ import { getParametres, setParametres, getUsers, createUser, updateUser, deleteU
   backupCreate, backupList, backupDelete, backupRestore, backupBrowseDir, backupSetDir, backupRestartScheduler,
   balanceGetPortsCOM, balanceConnect, balanceDisconnect, balanceIsConnected,
   rotationGenerer, rotationGetInfo,
-  profilList, profilApply, getCategories,
+  profilList, profilApply, profilListApplied, profilAdd, profilRemove, getCategories,
   listeImprimantes, testImprimante,
   emailRestartScheduler, emailEnvoyerHoraire, emailTestConfig, emailGetJournal,
   forfaitGet, forfaitProlonger, forfaitGenererLicence, forfaitAppliquerLicence,
@@ -75,6 +75,10 @@ export default function Parametres() {
   const [profilMsg, setProfilMsg] = useState('')
   const [nbCategories, setNbCategories] = useState(0)
   const [remplacer, setRemplacer] = useState(false)
+  const [appliedProfiles, setAppliedProfiles] = useState<{ id: string; label: string; applique_le?: string }[]>([])
+  const [addProfilId, setAddProfilId] = useState('')
+  const [addProfilLoading, setAddProfilLoading] = useState(false)
+  const [removeProfilLoading, setRemoveProfilLoading] = useState<string | null>(null)
 
   // Code rotatif (30min)
   const [rotationInfo, setRotationInfo] = useState<{ expire_a: string; genere_le: string; genere_par_nom: string; reste_secondes: number; actif: boolean } | null>(null)
@@ -129,11 +133,12 @@ const [licenceToken, setLicenceToken] = useState('')
   useEffect(() => {
     const load = async () => {
       try {
-        const [p, u, c, ri, pl, cats, prs] = await Promise.all([getParametres(), getUsers(), getCodesSuperviseur(), rotationGetInfo(), profilList(), getCategories(), listeImprimantes()])
+        const [p, u, c, ri, pl, cats, prs, applied] = await Promise.all([getParametres(), getUsers(), getCodesSuperviseur(), rotationGetInfo(), profilList(), getCategories(), listeImprimantes(), profilListApplied()])
         setParams(p as any)
         setUsers(u)
         setCodes(c)
         setProfils(pl)
+        setAppliedProfiles(applied as any)
         setNbCategories(Array.isArray(cats) ? cats.length : 0)
         setPrinters(Array.isArray(prs) ? prs : [])
         if (ri) { setRotationInfo(ri); setRotationCountdown(ri.reste_secondes) }
@@ -209,6 +214,8 @@ const [licenceToken, setLicenceToken] = useState('')
     setProfilMsg('')
     try {
       await profilApply(id, { remplacerCatalogue: remplacer })
+      const applied = await profilListApplied()
+      setAppliedProfiles(applied as any)
       await reloadProfil()
       setProfilSelection('')
       setRemplacer(false)
@@ -218,6 +225,42 @@ const [licenceToken, setLicenceToken] = useState('')
       setProfilMsg('Erreur pendant l\'application du profil.')
     }
     setProfilSaving(false)
+  }
+
+  const handleAddProfil = async () => {
+    if (!addProfilId) return
+    setAddProfilLoading(true)
+    setProfilMsg('')
+    try {
+      await profilAdd(addProfilId)
+      const applied = await profilListApplied()
+      setAppliedProfiles(applied as any)
+      setAddProfilId('')
+      setProfilMsg('Type de commerce ajouté.')
+      await reloadProfil()
+      setTimeout(() => setProfilMsg(''), 3500)
+    } catch {
+      setProfilMsg("Erreur lors de l'ajout du type de commerce.")
+    }
+    setAddProfilLoading(false)
+  }
+
+  const handleRemoveProfil = async (id: string) => {
+    const label = profils.find(p => p.id === id)?.label ?? id
+    if (!window.confirm(`Retirer « ${label} » du magasin ?\n\nLes catégories et produits associés resteront dans la base.`)) return
+    setRemoveProfilLoading(id)
+    setProfilMsg('')
+    try {
+      await profilRemove(id)
+      const applied = await profilListApplied()
+      setAppliedProfiles(applied as any)
+      setProfilMsg('Type de commerce retiré.')
+      await reloadProfil()
+      setTimeout(() => setProfilMsg(''), 3500)
+    } catch {
+      setProfilMsg('Erreur lors du retrait du type de commerce.')
+    }
+    setRemoveProfilLoading(null)
   }
 
   // Countdown ticker pour le code rotatif
@@ -591,7 +634,99 @@ const [licenceToken, setLicenceToken] = useState('')
                 <Sparkles size={24} className="text-indigo-500" />
               </div>
 
-              {current && (
+              {appliedProfiles.length > 0 && (
+                <div className="mb-5">
+                  <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    Types de commerce de votre magasin
+                  </div>
+                  <div className="space-y-2">
+                    {appliedProfiles.map((ap, idx) => {
+                      const p = profils.find(x => x.id === ap.id)
+                      const isPrincipal = idx === 0
+                      return (
+                        <div key={ap.id} className={`flex items-center gap-3 rounded-2xl border-2 p-3 ${isPrincipal ? 'border-indigo-200 bg-indigo-50' : 'border-gray-200 bg-white'}`}>
+                          <div
+                            className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+                            style={{ backgroundColor: (p?.couleur || '#6366f1') + '22' }}
+                          >
+                            {p?.icone || '🏪'}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-gray-800 text-sm truncate">{ap.label}</span>
+                              {isPrincipal && (
+                                <span className="text-[10px] font-bold bg-indigo-500 text-white px-1.5 py-0.5 rounded-full shrink-0">
+                                  PRINCIPAL
+                                </span>
+                              )}
+                              {!isPrincipal && (
+                                <span className="text-[10px] font-bold bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-full shrink-0">
+                                  ADDITIF
+                                </span>
+                              )}
+                            </div>
+                            {ap.applique_le && (
+                              <div className="text-xs text-gray-400">
+                                Ajouté le {new Date(ap.applique_le).toLocaleDateString('fr-FR')}
+                              </div>
+                            )}
+                          </div>
+                          {!isPrincipal && (
+                            <button
+                              onClick={() => handleRemoveProfil(ap.id)}
+                              disabled={removeProfilLoading === ap.id}
+                              className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                              title={`Retirer ${ap.label}`}
+                            >
+                              {removeProfilLoading === ap.id ? (
+                                <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <Trash2 size={16} />
+                              )}
+                            </button>
+                          )}
+                          {isPrincipal && <BadgeCheck className="text-indigo-400 shrink-0" size={20} />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {appliedProfiles.length > 0 && (
+                <div className="bg-gray-50 rounded-2xl p-4 mb-5">
+                  <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    Ajouter un type de commerce
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={addProfilId}
+                      onChange={e => setAddProfilId(e.target.value)}
+                      className="input-field flex-1 h-10 text-sm"
+                    >
+                      <option value="">Choisir un type…</option>
+                      {profils
+                        .filter(p => !appliedProfiles.some(a => a.id === p.id))
+                        .map(p => (
+                          <option key={p.id} value={p.id}>{p.icone} {p.label}</option>
+                        ))}
+                    </select>
+                    <button
+                      onClick={handleAddProfil}
+                      disabled={!addProfilId || addProfilLoading}
+                      className="btn-primary px-4 h-10 text-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                    >
+                      {addProfilLoading ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <><Plus size={14} /> Ajouter</>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {appliedProfiles.length === 0 && current && (
                 <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-100 rounded-2xl p-4 mb-5">
                   <div
                     className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0"
@@ -602,11 +737,6 @@ const [licenceToken, setLicenceToken] = useState('')
                   <div className="flex-1 min-w-0">
                     <div className="text-xs text-gray-500">Type de commerce actuel</div>
                     <div className="font-bold text-gray-800 truncate">{current.label}</div>
-                    {current.applique_le && (
-                      <div className="text-xs text-gray-400">
-                        Appliqué le {new Date(current.applique_le).toLocaleDateString('fr-FR')}
-                      </div>
-                    )}
                   </div>
                   <BadgeCheck className="text-indigo-500 shrink-0" size={22} />
                 </div>
