@@ -1256,16 +1256,38 @@ ipcMain.handle('sync:startServer', (_e, port: number) => {
 })
 ipcMain.handle('sync:stopServer', () => stopSyncServer())
 ipcMain.handle('sync:isRunning', () => !!(syncHttpServer && syncHttpServer.listening))
-ipcMain.handle('sync:getLocalIp', () => {
-  const { networkInterfaces } = require('os')
-  const nets = networkInterfaces()
-  for (const name of Object.keys(nets)) {
-    for (const net of nets[name] ?? []) {
-      if (net.family === 'IPv4' && !net.internal) return net.address
+
+// Détection intelligente de l'IP LAN réelle : ignore les adaptateurs virtuels
+// (VMware, VirtualBox, Hyper-V, Docker, WSL, etc.) et privilégie Wi-Fi / Ethernet.
+function detectLocalIp(): string {
+  try {
+    const { networkInterfaces } = require('os')
+    const nets = networkInterfaces()
+    const isVirtualName = (n: string) => /vmware|virtualbox|vehternet|vEthernet|hyper-v|hyperv|docker|wsl|loopback|virtual|orchard|tap|tun|npcap|npcap|ndis|vmnet/i.test(n)
+    const isPrivateIp = (ip: string) => {
+      const parts = ip.split('.').map(Number)
+      if (parts[0] === 10) return true
+      if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+      if (parts[0] === 192 && parts[1] === 168) return true
+      return false
     }
-  }
+    const isWifi = (n: string) => /wi-?fi|wlan|wireless/i.test(n)
+    const isEth = (n: string) => /^ethernet$/i.test(n) || /^eth\d+$/i.test(n)
+    let eth: string | null = null
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] ?? []) {
+        if (net.family !== 'IPv4' || net.internal) continue
+        if (isVirtualName(name) || !isPrivateIp(net.address)) continue
+        if (isWifi(name)) return net.address
+        if (isEth(name) && !eth) eth = net.address
+      }
+    }
+    if (eth) return eth
+  } catch {}
   return '127.0.0.1'
-})
+}
+
+ipcMain.handle('sync:getLocalIp', () => detectLocalIp())
 
 // ─── MODE CLIENT-SERVEUR : configuration & statut ─────────────────────────────
 ipcMain.handle('rt:setRole', (_e, role: string, ip?: string, port?: number) => {
@@ -1292,7 +1314,7 @@ ipcMain.handle('rt:getStatus', () => {
     port: p.reseau_serveur_port ?? '7890',
     online: isRtOnline(),
     serverRunning: !!(syncHttpServer && syncHttpServer.listening),
-    localIp: (() => { try { const { networkInterfaces } = require('os'); for (const n of Object.values(networkInterfaces())) { for (const net of (n as any[]) ?? []) { if (net.family === 'IPv4' && !net.internal) return net.address } } } catch {} return '127.0.0.1' })(),
+    localIp: detectLocalIp(),
     queue: 0
   }
 })
