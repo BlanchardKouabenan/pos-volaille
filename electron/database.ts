@@ -754,11 +754,27 @@ function createTables() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       code TEXT NOT NULL UNIQUE,
       nom TEXT NOT NULL,
-      icone TEXT NOT NULL DEFAULT '💵',
+      icone TEXT NOT NULL DEFAULT '�Y'�',
       actif INTEGER NOT NULL DEFAULT 1,
       ordre INTEGER NOT NULL DEFAULT 0
     )
   `)
+
+  // ��� JOURNAL D'AUDIT ����������������������������������������������
+  db.run(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date_heure TEXT NOT NULL DEFAULT (datetime('now')),
+      user_id INTEGER,
+      user_nom TEXT,
+      action TEXT NOT NULL,
+      entite TEXT NOT NULL,
+      entite_id INTEGER,
+      details TEXT
+    )
+  `)
+  db.run('CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_log(date_heure)')
+  db.run('CREATE INDEX IF NOT EXISTS idx_audit_entite ON audit_log(entite)')
 }
 
 function migrateSchema() {
@@ -1045,10 +1061,12 @@ export function getAllUsers() {
 }
 
 export function createUser(data: { username: string; password: string; role: string; nom: string }) {
-  return runWrite(
+  const r = runWrite(
     'INSERT INTO users (username, password_hash, role, nom) VALUES (?, ?, ?, ?)',
     [data.username, hashPassword(data.password), data.role, data.nom]
   )
+  logAudit({ action: 'creation', entite: 'utilisateur', details: { username: data.username, role: data.role, nom: data.nom } })
+  return r
 }
 
 export function updateUser(id: number, data: { username?: string; password?: string; role?: string; nom?: string; actif?: number }) {
@@ -1060,7 +1078,9 @@ export function updateUser(id: number, data: { username?: string; password?: str
   if (data.nom !== undefined) { fields.push('nom = ?'); values.push(data.nom) }
   if (data.actif !== undefined) { fields.push('actif = ?'); values.push(data.actif) }
   values.push(id)
-  return runWrite(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values)
+  const r = runWrite(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values)
+  logAudit({ action: 'modification', entite: 'utilisateur', entite_id: id, details: data })
+  return r
 }
 
 export function deleteUser(id: number) {
@@ -1069,7 +1089,9 @@ export function deleteUser(id: number) {
   if (target && target.role === 'admin') {
     throw new Error('Le compte administrateur ne peut pas être supprimé')
   }
-  return runWrite('DELETE FROM users WHERE id = ?', [id])
+  const r = runWrite('DELETE FROM users WHERE id = ?', [id])
+  logAudit({ action: 'suppression', entite: 'utilisateur', entite_id: id })
+  return r
 }
 
 // ─── CATEGORIES ───────────────────────────────────────────────────────────────
@@ -1079,7 +1101,9 @@ export function getAllCategories() {
 }
 
 export function createCategorie(data: { nom: string; couleur: string; icone: string }) {
-  return runWrite('INSERT INTO categories (nom, couleur, icone) VALUES (?, ?, ?)', [data.nom, data.couleur, data.icone])
+  const r = runWrite('INSERT INTO categories (nom, couleur, icone) VALUES (?, ?, ?)', [data.nom, data.couleur, data.icone])
+  logAudit({ action: 'creation', entite: 'categorie', details: { nom: data.nom } })
+  return r
 }
 
 export function updateCategorie(id: number, data: { nom?: string; couleur?: string; icone?: string }) {
@@ -1089,7 +1113,9 @@ export function updateCategorie(id: number, data: { nom?: string; couleur?: stri
   if (data.couleur !== undefined) { fields.push('couleur = ?'); values.push(data.couleur) }
   if (data.icone !== undefined) { fields.push('icone = ?'); values.push(data.icone) }
   values.push(id)
-  return runWrite(`UPDATE categories SET ${fields.join(', ')} WHERE id = ?`, values)
+  const r = runWrite(`UPDATE categories SET ${fields.join(', ')} WHERE id = ?`, values)
+  logAudit({ action: 'modification', entite: 'categorie', entite_id: id, details: data })
+  return r
 }
 
 // ─── PRODUITS ─────────────────────────────────────────────────────────────────
@@ -1117,10 +1143,12 @@ export function getProduitByBarcode(codeBarre: string) {
 }
 
 export function createProduit(data: any) {
-  return runWrite(
+  const r = runWrite(
     'INSERT INTO produits (nom, categorie_id, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, code_barre, date_peremption, lot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [data.nom, data.categorie_id, data.prix_vente, data.prix_achat, data.unite, data.stock_actuel ?? 0, data.stock_minimum ?? 0, data.code_barre ?? null, data.date_peremption ?? null, data.lot ?? null]
   )
+  logAudit({ action: 'creation', entite: 'produit', details: { nom: data.nom, prix_vente: data.prix_vente } })
+  return r
 }
 
 export function updateProduit(id: number, data: any) {
@@ -1137,11 +1165,15 @@ export function updateProduit(id: number, data: any) {
     const prod = queryOne(`SELECT id, prix_vente FROM produits WHERE id=?`, [id])
     if (prod) logSync('produit', id, 'update', { id, prix_vente: prod.prix_vente })
   }
+  logAudit({ action: 'modification', entite: 'produit', entite_id: id, details: data })
   return r
 }
 
 export function deleteProduit(id: number) {
-  return runWrite('UPDATE produits SET actif = 0 WHERE id = ?', [id])
+  const prod = queryOne('SELECT nom FROM produits WHERE id = ?', [id])
+  const r = runWrite('UPDATE produits SET actif = 0 WHERE id = ?', [id])
+  logAudit({ action: 'suppression', entite: 'produit', entite_id: id, details: { nom: prod?.nom } })
+  return r
 }
 
 export function getLowStockProduits() {
@@ -4365,8 +4397,49 @@ export function getCompteResultat(annee: number, mois?: number) {
   }
 }
 
+// ─── JOURNAL D'AUDIT ─────────────────────────────────────────────────────────
+
+let _currentAuditUser: { id: number; nom: string } | null = null
+
+export function setAuditUser(user: { id: number; nom: string } | null) {
+  _currentAuditUser = user
+}
+
+export function getAuditUser() {
+  return _currentAuditUser
+}
+
+export function logAudit(data: {
+  user_id?: number
+  user_nom?: string
+  action: string
+  entite: string
+  entite_id?: number
+  details?: any
+}) {
+  const uid = data.user_id ?? _currentAuditUser?.id ?? null
+  const uname = data.user_nom ?? _currentAuditUser?.nom ?? null
+  const detailsStr = data.details ? JSON.stringify(data.details) : null
+  runWrite(
+    `INSERT INTO audit_log (user_id, user_nom, action, entite, entite_id, details) VALUES (?, ?, ?, ?, ?, ?)`,
+    [uid, uname, data.action, data.entite, data.entite_id ?? null, detailsStr]
+  )
+}
+
+export function getAuditLog(dateDebut?: string, dateFin?: string, entite?: string, limit = 500) {
+  const where: string[] = []
+  const params: any[] = []
+  if (dateDebut) { where.push('date(date_heure) >= ?'); params.push(dateDebut) }
+  if (dateFin) { where.push('date(date_heure) <= ?'); params.push(dateFin) }
+  if (entite) { where.push('entite = ?'); params.push(entite) }
+  const clause = where.length ? 'WHERE ' + where.join(' AND ') : ''
+  return queryAll(
+    `SELECT * FROM audit_log ${clause} ORDER BY date_heure DESC LIMIT ?`,
+    [...params, limit]
+  )
+}
+
 // ─── RAPPORT TVA ──────────────────────────────────────────────────────────────
-// Cumule la TVA par taux de TVA effectif sur les articles vendus pendant une
 // période. Chaque ligne de vente (vente_lignes) est un montant TTC. Le taux
 // effectif d'un article est son taux par produit (produits.taux_tva) si celui-ci
 // est appliqué (tva_applicable=1) ; sinon on retombe sur le taux global

@@ -1,5 +1,5 @@
 ﻿import { useState, useCallback } from 'react'
-import { getEtatComplet, exportPdf, dialogSaveFile, formatCurrency, formatDate } from '@/lib/ipc'
+import { getEtatComplet, exportPdf, dialogSaveFile, formatCurrency, formatDate, auditGetLog } from '@/lib/ipc'
 import type { EtatComplet } from '@/types'
 import * as XLSX from 'xlsx'
 import {
@@ -52,7 +52,7 @@ const margeBadge = (taux: number) => {
   return '🔴'
 }
 
-type Tab = 'resume' | 'pl' | 'ventes' | 'articles' | 'categories' | 'connexions' | 'sessions' | 'tiroir' | 'charges' | 'annulations'
+type Tab = 'resume' | 'pl' | 'ventes' | 'articles' | 'categories' | 'connexions' | 'sessions' | 'tiroir' | 'charges' | 'annulations' | 'audit'
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'resume', label: 'Résumé', icon: <TrendingUp size={16} /> },
@@ -65,6 +65,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'tiroir', label: 'Tiroir', icon: <Eye size={16} /> },
   { id: 'charges', label: 'Charges', icon: <CreditCard size={16} /> },
   { id: 'annulations', label: 'Annulations', icon: <AlertTriangle size={16} /> },
+  { id: 'audit', label: 'Journal Audit', icon: <Activity size={16} /> },
 ]
 
 export default function Etats() {
@@ -76,16 +77,22 @@ export default function Etats() {
   const [exporting, setExporting] = useState(false)
   const [sortArticle, setSortArticle] = useState<'ca' | 'qte' | 'nb' | 'marge' | 'taux'>('ca')
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
+  const [auditLogs, setAuditLogs] = useState<any[]>([])
+  const [auditEntite, setAuditEntite] = useState<string>('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const data = await getEtatComplet(dateDebut, dateFin)
       setEtat(data)
+      if (activeTab === 'audit') {
+        const logs = await auditGetLog(dateDebut, dateFin, auditEntite || undefined)
+        setAuditLogs(logs)
+      }
     } finally {
       setLoading(false)
     }
-  }, [dateDebut, dateFin])
+  }, [dateDebut, dateFin, activeTab, auditEntite])
 
   const handleSort = (col: typeof sortArticle) => {
     if (sortArticle === col) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
@@ -861,6 +868,66 @@ export default function Etats() {
                               <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${v.statut === 'annule' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
                                 {v.statut === 'annule' ? 'Annulé' : 'Remboursé'}
                               </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'audit' && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Activity size={18} className="text-indigo-500" />
+                    <h2 className="font-semibold text-gray-900">Journal d'audit ({auditLogs.length})</h2>
+                  </div>
+                  <select value={auditEntite} onChange={e => setAuditEntite(e.target.value)}
+                    className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                    <option value="">Toutes les entités</option>
+                    <option value="produit">Produits</option>
+                    <option value="categorie">Catégories</option>
+                    <option value="utilisateur">Utilisateurs</option>
+                  </select>
+                </div>
+                {auditLogs.length === 0 ? (
+                  <div className="py-12 text-center text-gray-400"><p>Aucune action enregistrée sur cette période</p></div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left px-4 py-3 font-medium text-gray-600">Date / Heure</th>
+                          <th className="text-left px-4 py-3 font-medium text-gray-600">Utilisateur</th>
+                          <th className="text-left px-4 py-3 font-medium text-gray-600">Action</th>
+                          <th className="text-left px-4 py-3 font-medium text-gray-600">Entité</th>
+                          <th className="text-left px-4 py-3 font-medium text-gray-600">ID</th>
+                          <th className="text-left px-4 py-3 font-medium text-gray-600">Détails</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {auditLogs.map((log: any) => (
+                          <tr key={log.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">{formatDate(log.date_heure)}</td>
+                            <td className="px-4 py-2.5 text-xs font-medium text-gray-700">{log.user_nom ?? '—'}</td>
+                            <td className="px-4 py-2.5">
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                                log.action === 'creation' ? 'bg-green-100 text-green-700' :
+                                log.action === 'modification' ? 'bg-blue-100 text-blue-700' :
+                                'bg-red-100 text-red-700'
+                              }`}>{log.action}</span>
+                            </td>
+                            <td className="px-4 py-2.5 text-xs font-medium text-gray-700">{log.entite}</td>
+                            <td className="px-4 py-2.5 text-xs text-gray-500">{log.entite_id ?? '—'}</td>
+                            <td className="px-4 py-2.5 text-xs text-gray-500 max-w-xs truncate">
+                              {log.details ? (
+                                <span className="font-mono bg-gray-50 px-1.5 py-0.5 rounded">
+                                  {typeof log.details === 'string' ? log.details : JSON.stringify(log.details)}
+                                </span>
+                              ) : '—'}
                             </td>
                           </tr>
                         ))}

@@ -49,6 +49,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   marquerCampagneEnvoyee, checkAnniversairesAujourdhui,
   getAllFactures, getFactureById, createFacture, updateFactureStatut, getCompteResultat,
   getRapportTVA,
+  setAuditUser, getAuditLog, logAudit,
   getProfileCommerce, listProfils, applyProfileCommerce,
   listAttributs, listAttributsActifs, getAttributsProduit, setAttributsProduit, getAttributionsTousProduits,
   getVariantesProduit, setVariantesProduit,
@@ -256,7 +257,11 @@ app.on('window-all-closed', () => {
 // ─── IPC HANDLERS ─────────────────────────────────────────────────────────────
 
 // Auth
-ipcMain.handle('db:login', (_e, username, password) => loginUser(username, password))
+ipcMain.handle('db:login', (_e, username, password) => {
+  const user = loginUser(username, password)
+  if (user && user.id) setAuditUser({ id: user.id, nom: user.nom || username })
+  return user
+})
 
 // Users
 ipcMain.handle('db:getUsers', () => getAllUsers())
@@ -998,6 +1003,7 @@ ipcMain.handle('facture:create', (_e, data: any) => createFacture(data))
 ipcMain.handle('facture:updateStatut', (_e, id: number, statut: string) => updateFactureStatut(id, statut))
 ipcMain.handle('finance:compteResultat', (_e, annee: number, mois?: number) => getCompteResultat(annee, mois))
 ipcMain.handle('finance:rapportTVA', (_e, dateDebut?: string, dateFin?: string) => getRapportTVA(dateDebut, dateFin))
+ipcMain.handle('audit:getLog', (_e, dateDebut?: string, dateFin?: string, entite?: string) => getAuditLog(dateDebut, dateFin, entite))
 
 ipcMain.handle('fs:writeFile', async (_e, filePath: string, data: number[]) => {
   try {
