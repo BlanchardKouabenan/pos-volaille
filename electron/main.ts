@@ -48,6 +48,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   getClientProfile, getDestinatairesSegment, getAllCampagnes, createCampagne, deleteCampagne,
   marquerCampagneEnvoyee, checkAnniversairesAujourdhui,
   getAllFactures, getFactureById, createFacture, updateFactureStatut, getCompteResultat,
+  getRapportTVA,
   getProfileCommerce, listProfils, applyProfileCommerce,
   listAttributs, listAttributsActifs, getAttributsProduit, setAttributsProduit, getAttributionsTousProduits,
   getVariantesProduit, setVariantesProduit,
@@ -996,6 +997,7 @@ ipcMain.handle('facture:getById', (_e, id: number) => getFactureById(id))
 ipcMain.handle('facture:create', (_e, data: any) => createFacture(data))
 ipcMain.handle('facture:updateStatut', (_e, id: number, statut: string) => updateFactureStatut(id, statut))
 ipcMain.handle('finance:compteResultat', (_e, annee: number, mois?: number) => getCompteResultat(annee, mois))
+ipcMain.handle('finance:rapportTVA', (_e, dateDebut?: string, dateFin?: string) => getRapportTVA(dateDebut, dateFin))
 
 ipcMain.handle('fs:writeFile', async (_e, filePath: string, data: number[]) => {
   try {

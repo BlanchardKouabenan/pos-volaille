@@ -4364,3 +4364,76 @@ export function getCompteResultat(annee: number, mois?: number) {
     ventesParJour
   }
 }
+
+// ─── RAPPORT TVA ──────────────────────────────────────────────────────────────
+// Cumule la TVA par taux de TVA effectif sur les articles vendus pendant une
+// période. Chaque ligne de vente (vente_lignes) est un montant TTC. Le taux
+// effectif d'un article est son taux par produit (produits.taux_tva) si celui-ci
+// est appliqué (tva_applicable=1) ; sinon on retombe sur le taux global
+// paramètre (params.tva_taux), cohérent avec le mode de calcul du compte de
+// résultat. Les ventes annulées / remboursées sont exclues.
+export function getRapportTVA(dateDebut?: string, dateFin?: string) {
+  const where: string[] = ["v.statut = 'completed'"]
+  const params: any[] = []
+  if (dateDebut) { where.push('date(v.date) >= ?'); params.push(dateDebut) }
+  if (dateFin) { where.push('date(v.date) <= ?'); params.push(dateFin) }
+
+  const paramsGlobaux = getAllParametres()
+  const tauxGlobal = parseFloat(paramsGlobaux.tva_taux ?? '0')
+
+  const rows = queryAll(`
+    SELECT
+      CASE
+        WHEN p.tva_applicable = 1 AND COALESCE(p.taux_tva, 0) > 0 THEN p.taux_tva
+        WHEN p.id IS NULL THEN 0
+        ELSE ${tauxGlobal}
+      END AS taux_effectif,
+      COUNT(DISTINCT vl.id) AS nb_lignes,
+      COUNT(DISTINCT v.id) AS nb_ventes,
+      SUM(vl.total_ligne) AS total_ttc
+    FROM vente_lignes vl
+    JOIN ventes v ON vl.vente_id = v.id
+    LEFT JOIN produits p ON vl.produit_id = p.id
+    WHERE ${where.join(' AND ')}
+    GROUP BY taux_effectif
+    ORDER BY taux_effectif
+  `, params)
+
+  // Nombre de tickets distincts sur la période
+  const nbTickets = queryOne(`
+    SELECT COUNT(*) AS n FROM ventes v
+    WHERE ${where.join(' AND ')}
+  `, params)?.n ?? 0
+
+  let totalHT = 0
+  let totalTVA = 0
+  let totalTTC = 0
+  const parTaux = rows.map((r: any) => {
+    const taux = Number(r.taux_effectif ?? 0)
+    const ttc = Number(r.total_ttc ?? 0)
+    const tva = taux > 0 ? ttc - (ttc / (1 + taux / 100)) : 0
+    const ht = ttc - tva
+    totalHT += ht
+    totalTVA += tva
+    totalTTC += ttc
+    return {
+      taux,
+      nb_lignes: Number(r.nb_lignes ?? 0),
+      base_ht: Math.round(ht * 100) / 100,
+      tva: Math.round(tva * 100) / 100,
+      total_ttc: Math.round(ttc * 100) / 100
+    }
+  })
+
+  return {
+    periode: { debut: dateDebut ?? null, fin: dateFin ?? null },
+    taux_global: tauxGlobal,
+    nb_ventes: Number(nbTickets),
+    parTaux,
+    totaux: {
+      base_ht: Math.round(totalHT * 100) / 100,
+      tva: Math.round(totalTVA * 100) / 100,
+      total_ttc: Math.round(totalTTC * 100) / 100
+    }
+  }
+}

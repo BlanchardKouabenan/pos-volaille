@@ -377,6 +377,7 @@ export const factureGetById = (id: number): Promise<any> => api().facture.getByI
 export const factureCreate = (data: any): Promise<any> => api().facture.create(data)
 export const factureUpdateStatut = (id: number, statut: string): Promise<any> => api().facture.updateStatut(id, statut)
 export const financeCompteResultat = (annee: number, mois?: number): Promise<any> => api().finance.compteResultat(annee, mois)
+export const financeRapportTVA = (dateDebut?: string, dateFin?: string): Promise<any> => api().finance.rapportTVA(dateDebut, dateFin)
 
 // ─── Mise à jour automatique ───────────────────────────────────────────────────
 export type UpdateStatus =

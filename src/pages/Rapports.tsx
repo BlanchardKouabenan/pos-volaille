@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect } from 'react'
 import {
   getVenteStats, getVentes, formatCurrency, getParametres,
-  getChargesStats, getTiroirLog, dialogSaveFile, getCharges
+  getChargesStats, getTiroirLog, dialogSaveFile, getCharges, financeRapportTVA
 } from '@/lib/ipc'
 import type { VenteStats, Vente, TiroirLog, Charge } from '@/types'
 import * as XLSX from 'xlsx'
@@ -30,7 +30,7 @@ const MODE_COLORS: Record<string, string> = {
   carte: 'bg-purple-50 text-purple-700 border-purple-200'
 }
 
-type PeriodeTab = 'jour' | 'semaine' | 'mois' | 'annee' | 'personnalise' | 'tiroir' | 'charges'
+type PeriodeTab = 'jour' | 'semaine' | 'mois' | 'annee' | 'personnalise' | 'tiroir' | 'charges' | 'tva'
 
 function getPeriode(tab: PeriodeTab) {
   const now = new Date()
@@ -81,6 +81,7 @@ export default function Rapports() {
   const [tiroirLogs, setTiroirLogs] = useState<TiroirLog[]>([])
   const [charges, setCharges] = useState<Charge[]>([])
   const [chargesStats, setChargesStats] = useState<any>(null)
+  const [rapportTVA, setRapportTVA] = useState<any>(null)
   const [dateDebut, setDateDebut] = useState(today())
   const [dateFin, setDateFin] = useState(today())
   const [monnaie, setMonnaie] = useState('FCFA')
@@ -92,7 +93,7 @@ export default function Rapports() {
   }, [])
 
   useEffect(() => {
-    if (activeTab !== 'personnalise' && activeTab !== 'tiroir' && activeTab !== 'charges') {
+    if (activeTab !== 'personnalise' && activeTab !== 'tiroir' && activeTab !== 'charges' && activeTab !== 'tva') {
       const p = getPeriode(activeTab)
       setDateDebut(p.debut)
       setDateFin(p.fin)
@@ -101,6 +102,8 @@ export default function Rapports() {
       loadTiroir(dateDebut, dateFin)
     } else if (activeTab === 'charges') {
       loadCharges(dateDebut, dateFin)
+    } else if (activeTab === 'tva') {
+      loadTVA(dateDebut, dateFin)
     }
   }, [activeTab])
 
@@ -139,9 +142,19 @@ export default function Rapports() {
     setLoading(false)
   }
 
+  const loadTVA = async (debut = dateDebut, fin = dateFin) => {
+    setLoading(true)
+    try {
+      const r = await financeRapportTVA(debut, fin)
+      setRapportTVA(r)
+    } catch {}
+    setLoading(false)
+  }
+
   const handleSearch = () => {
     if (activeTab === 'tiroir') loadTiroir()
     else if (activeTab === 'charges') loadCharges()
+    else if (activeTab === 'tva') loadTVA()
     else {
       const p = getPeriode(activeTab)
       loadAll(dateDebut, dateFin, p.prevDebut, p.prevFin)
@@ -238,6 +251,19 @@ export default function Rapports() {
         XLSX.utils.book_append_sheet(wb, wsTiroir, 'Tiroir')
       }
 
+      // Feuille 6: TVA
+      if (rapportTVA?.parTaux && rapportTVA.parTaux.length > 0) {
+        const tvaData = [
+          ['Rapport TVA', `${dateDebut} au ${dateFin}`],
+          [],
+          ['Taux TVA', 'Nb lignes', 'Base HT', 'TVA', 'Total TTC'],
+          ...rapportTVA.parTaux.map((r: any) => [`${r.taux}%`, r.nb_lignes, r.base_ht, r.tva, r.total_ttc]),
+          ['TOTAL', '', rapportTVA.totaux?.base_ht ?? 0, rapportTVA.totaux?.tva ?? 0, rapportTVA.totaux?.total_ttc ?? 0]
+        ]
+        const wsTVA = XLSX.utils.aoa_to_sheet(tvaData)
+        XLSX.utils.book_append_sheet(wb, wsTVA, 'TVA')
+      }
+
       const filename = `rapport_${dateDebut}_${dateFin}.xlsx`
       const filePath = await dialogSaveFile(filename)
       if (filePath) {
@@ -260,6 +286,7 @@ export default function Rapports() {
     { id: 'personnalise', label: 'Personnalisé' },
     { id: 'tiroir', label: 'Tiroir' },
     { id: 'charges', label: 'Charges' },
+    { id: 'tva', label: 'TVA' },
   ]
 
   return (
@@ -295,7 +322,7 @@ export default function Rapports() {
         </div>
 
         {/* Filtre date pour onglets personnalisé/tiroir/charges */}
-        {(activeTab === 'personnalise' || activeTab === 'tiroir' || activeTab === 'charges') && (
+        {(activeTab === 'personnalise' || activeTab === 'tiroir' || activeTab === 'charges' || activeTab === 'tva') && (
           <div className="flex gap-2 items-center">
             <Calendar size={18} className="text-gray-400 flex-shrink-0" />
             <input type="date" value={dateDebut} onChange={e => setDateDebut(e.target.value)}
@@ -476,7 +503,95 @@ export default function Rapports() {
         )}
 
         {/* ─── ONGLETS VENTES ───────────────────────────────────────── */}
-        {activeTab !== 'tiroir' && activeTab !== 'charges' && (
+        {/* ��� ONGLET TVA ����������������������������������������� */}
+        {activeTab === 'tva' && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div className="bg-white rounded-2xl shadow-card p-4 flex items-center gap-3">
+                <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center">
+                  <BarChart3 size={18} />
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Base HT</div>
+                  <div className="font-bold text-blue-700 text-lg">{fmt(rapportTVA?.totaux?.base_ht ?? 0)}</div>
+                </div>
+              </div>
+              <div className="bg-white rounded-2xl shadow-card p-4 flex items-center gap-3">
+                <div className="w-10 h-10 bg-emerald-600 text-white rounded-xl flex items-center justify-center">
+                  <TrendingUp size={18} />
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">TVA collect�e</div>
+                  <div className="font-bold text-emerald-700 text-lg">{fmt(rapportTVA?.totaux?.tva ?? 0)}</div>
+                </div>
+              </div>
+              <div className="bg-white rounded-2xl shadow-card p-4 flex items-center gap-3">
+                <div className="w-10 h-10 bg-gray-800 text-white rounded-xl flex items-center justify-center">
+                  <TrendingDown size={18} />
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Total TTC</div>
+                  <div className="font-bold text-gray-900 text-lg">{fmt(rapportTVA?.totaux?.total_ttc ?? 0)}</div>
+                </div>
+              </div>
+              <div className="bg-white rounded-2xl shadow-card p-4 flex items-center gap-3">
+                <div className="w-10 h-10 bg-orange-500 text-white rounded-xl flex items-center justify-center">
+                  <ShoppingBag size={18} />
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Nb de vents</div>
+                  <div className="font-bold text-orange-600 text-lg">{rapportTVA?.nb_ventes ?? 0}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-card overflow-hidden">
+              <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="font-bold text-gray-800">D�tail par taux de TVA</h2>
+              </div>
+              {(!rapportTVA?.parTaux || rapportTVA.parTaux.length === 0) ? (
+                <p className="text-center text-gray-400 py-8">Aucune vente tax�e sur la p�riode</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="text-left px-4 py-2 text-xs text-gray-500 font-semibold">Taux TVA</th>
+                        <th className="text-left px-4 py-2 text-xs text-gray-500 font-semibold">Nb lignes</th>
+                        <th className="text-right px-4 py-2 text-xs text-gray-500 font-semibold">Base HT</th>
+                        <th className="text-right px-4 py-2 text-xs text-gray-500 font-semibold">TVA</th>
+                        <th className="text-right px-4 py-2 text-xs text-gray-500 font-semibold">Total TTC</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {rapportTVA.parTaux.map((r: any) => (
+                        <tr key={r.taux} className="hover:bg-gray-50">
+                          <td className="px-4 py-2">
+                            <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-semibold">{r.taux}%</span>
+                          </td>
+                          <td className="px-4 py-2 text-gray-600 text-xs">{r.nb_lignes}</td>
+                          <td className="px-4 py-2 text-right font-medium text-gray-800">{fmt(r.base_ht)}</td>
+                          <td className="px-4 py-2 text-right font-bold text-emerald-600">{fmt(r.tva)}</td>
+                          <td className="px-4 py-2 text-right font-bold text-gray-900">{fmt(r.total_ttc)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="border-t-2 border-gray-200 bg-gray-50">
+                      <tr>
+                        <td colSpan={2} className="px-4 py-2 font-bold text-gray-700">TOTAL</td>
+                        <td className="px-4 py-2 text-right font-bold text-gray-800">{fmt(rapportTVA?.totaux?.base_ht ?? 0)}</td>
+                        <td className="px-4 py-2 text-right font-bold text-emerald-700">{fmt(rapportTVA?.totaux?.tva ?? 0)}</td>
+                        <td className="px-4 py-2 text-right font-bold text-gray-900">{fmt(rapportTVA?.totaux?.total_ttc ?? 0)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {activeTab !== 'tiroir' && activeTab !== 'charges' && activeTab !== 'tva' && (
           <>
             {/* KPIs avec comparaison */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

@@ -296,6 +296,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   finance: {
     compteResultat: (annee: number, mois?: number) => ipcRenderer.invoke('finance:compteResultat', annee, mois),
+    rapportTVA: (dateDebut?: string, dateFin?: string) => ipcRenderer.invoke('finance:rapportTVA', dateDebut, dateFin),
   },
   rotation: {
     generer: (userId: number) => ipcRenderer.invoke('rotation:generer', userId),
