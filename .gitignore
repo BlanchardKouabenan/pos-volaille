@@ -20,3 +20,7 @@ AppData/
 # Système
 .DS_Store
 Thumbs.db
+
+# Résidus d'impression (ports USB/COM créés accidentellement par l'impression raw)
+USB*
+
