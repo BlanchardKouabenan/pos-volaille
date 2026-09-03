@@ -754,7 +754,7 @@ function createTables() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       code TEXT NOT NULL UNIQUE,
       nom TEXT NOT NULL,
-      icone TEXT NOT NULL DEFAULT '�Y'�',
+      icone TEXT NOT NULL DEFAULT 'any',
       actif INTEGER NOT NULL DEFAULT 1,
       ordre INTEGER NOT NULL DEFAULT 0
     )
