@@ -2261,10 +2261,52 @@ export function removeProfileType(id: string): boolean {
       setParametre('unite_defaut', prof.unite_defaut)
       setParametre('modes_paiement_actifs', JSON.stringify(prof.mode_paiements))
       setParametre('modules_actifs', JSON.stringify(prof.modules))
+      try {
+        const allModes = queryAll('SELECT code FROM methodes_paiement')
+        for (const m of allModes) db.run('UPDATE methodes_paiement SET actif = ? WHERE code = ?', [prof.mode_paiements.includes(m.code) ? 1 : 0, m.code])
+      } catch {}
     }
   }
+
+  // Retrait du catalogue du type supprimé : on supprime ses catégories et produits,
+  // SAUF si une catégorie est partagée avec un autre type de commerce encore actif.
+  removeProfileCatalogue(id, list)
+
   saveDb()
   return true
+}
+
+function removeProfileCatalogue(removedId: string, remainingList: ProfilApplique[]) {
+  const removed = PROFILS.find(p => p.id === removedId)
+  if (!removed?.categories?.length) return
+
+  // Catégories déclarées par les autres types encore présents (noms partagés à conserver)
+  const sharedCats = new Set<string>()
+  for (const ap of remainingList) {
+    const prof = PROFILS.find(p => p.id === ap.id)
+    for (const c of prof?.categories ?? []) sharedCats.add(c.nom)
+  }
+
+  // On ne retire que les catégories propres au type supprimé (non partagées)
+  const catsToRemove: number[] = []
+  for (const c of removed.categories) {
+    if (sharedCats.has(c.nom)) continue
+    const row = queryOne('SELECT id FROM categories WHERE nom = ?', [c.nom])
+    if (row) catsToRemove.push(row.id)
+  }
+  if (!catsToRemove.length) return
+
+  db.run('PRAGMA foreign_keys = OFF')
+  try {
+    for (const catId of catsToRemove) {
+      db.run('DELETE FROM variantes_produit WHERE produit_id IN (SELECT id FROM produits WHERE categorie_id = ?)', [catId])
+      db.run('DELETE FROM attributs_produit WHERE produit_id IN (SELECT id FROM produits WHERE categorie_id = ?)', [catId])
+      db.run('DELETE FROM produits WHERE categorie_id = ?', [catId])
+      db.run('DELETE FROM categories WHERE id = ?', [catId])
+    }
+  } finally {
+    db.run('PRAGMA foreign_keys = ON')
+  }
 }
 
 // ─── ALERTES ──────────────────────────────────────────────────────────────────
