@@ -184,7 +184,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     print: (data: any) => ipcRenderer.invoke('printer:print', data),
     getReceiptText: (data: any) => ipcRenderer.invoke('printer:getReceiptText', data),
     test: () => ipcRenderer.invoke('printer:test'),
-    list: () => ipcRenderer.invoke('imprimantes:list')
+    list: () => ipcRenderer.invoke('imprimantes:list'),
+    printZpl: (items: any[], printerName: string) => ipcRenderer.invoke('etiquette:printZpl', items, printerName)
   },
   tiroir: {
     ouvrir: (data: any) => ipcRenderer.invoke('tiroir:ouvrir', data)
@@ -241,6 +242,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getRegles: () => ipcRenderer.invoke('alertes:getRegles'),
     updateRegle: (id: number, data: any) => ipcRenderer.invoke('alertes:updateRegle', id, data),
     runAuto: () => ipcRenderer.invoke('alertes:runAuto'),
+    setAutoInterval: (minutes: number) => ipcRenderer.invoke('alertes:setAutoInterval', minutes),
   },
   notifications: {
     configure: (enabled: { [K: string]: boolean }) => ipcRenderer.invoke('notif:configure', enabled),
@@ -250,6 +252,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     importClients: (lignes: any[], userId?: number) => ipcRenderer.invoke('import:clients', lignes, userId),
     exportProduits: () => ipcRenderer.invoke('export:produits'),
     exportVentes: (dateDebut: string, dateFin: string) => ipcRenderer.invoke('export:ventes', dateDebut, dateFin),
+    exportStock: () => ipcRenderer.invoke('export:stock'),
     exportClients: () => ipcRenderer.invoke('export:clients'),
     getLog: () => ipcRenderer.invoke('import:getLog'),
   },

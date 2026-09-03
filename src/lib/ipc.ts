@@ -94,6 +94,8 @@ export const getReceiptText = (data: PrintReceiptData): Promise<string> => api()
 export const testImprimante = (): Promise<{ success: boolean; error?: string; interface_utilisee?: string }> =>
   api().printer.test()
 export const listeImprimantes = (): Promise<{ name: string; thermal: boolean }[]> => api().printer.list()
+export const imprimerEtiquettesZpl = (items: any[], printerName: string): Promise<{ success: boolean; error?: string }> =>
+  api().printer.printZpl(items, printerName)
 
 // ─── Sessions caisse ──────────────────────────────────────────────────────────
 export const ouvrirSession = (userId: number, fondCaisse: number): Promise<any> =>
@@ -305,6 +307,7 @@ const aa = () => api().alertesAuto
 export const alertesGetRegles = (): Promise<any[]> => aa().getRegles()
 export const alertesUpdateRegle = (id: number, data: { actif?: number; params?: string }) => aa().updateRegle(id, data)
 export const alertesRunAuto = (): Promise<{ nouvelles: number; details: string[] }> => aa().runAuto()
+export const alertesSetAutoInterval = (minutes: number) => aa().setAutoInterval(minutes)
 
 // ─── Import / Export ──────────────────────────────────────────────────────────
 const ie = () => api().importExport
@@ -312,6 +315,7 @@ export const importerProduits = (lignes: any[], userId?: number) => ie().importP
 export const importerClients = (lignes: any[], userId?: number) => ie().importClients(lignes, userId)
 export const exporterProduits = (): Promise<any[]> => ie().exportProduits()
 export const exporterVentes = (dateDebut: string, dateFin: string): Promise<any[]> => ie().exportVentes(dateDebut, dateFin)
+export const exporterStock = (): Promise<any[]> => ie().exportStock()
 export const exporterClients = (): Promise<any[]> => ie().exportClients()
 export const importGetLog = (): Promise<any[]> => ie().getLog()
 

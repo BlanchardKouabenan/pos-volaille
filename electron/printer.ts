@@ -88,6 +88,19 @@ function getWindowsPrinterDriver(): any {
   return windowsPrinterDriver
 }
 
+// Envoie des octets bruts sur une file Windows (utilisé pour ZPL/EPL d'étiquettes)
+export async function spoolRawBytes(printerName: string, data: Buffer): Promise<void> {
+  const driver = getWindowsPrinterDriver()
+  await new Promise<void>((resolve, reject) => {
+    driver.printDirect({
+      printer: printerName,
+      data,
+      success: () => resolve(),
+      error: (e: any) => reject(new Error(e?.message || String(e)))
+    })
+  })
+}
+
 export interface ReceiptData {
   ticket: string
   date: string

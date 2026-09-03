@@ -142,8 +142,9 @@ export interface Alerte {
 export interface VenteStats {
   totalVentes: { nb: number; ca: number; remises: number }
   parModePaiement: { mode_paiement: string; nb: number; total: number }[]
-  topProduits: { nom: string; qte_vendue: number; ca: number }[]
+  topProduits: { nom: string; qte_vendue: number; ca: number; cout?: number; marge?: number }[]
   parJour: { jour: string; nb: number; ca: number }[]
+  marge?: { ca: number; cout: number }
 }
 
 export interface PrintReceiptData {

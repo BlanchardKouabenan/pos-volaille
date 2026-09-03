@@ -223,24 +223,50 @@ export default function DashboardProprietaire() {
         </div>
       </div>
 
-      {/* Par boutique */}
-      {(data?.boutiques?.length ?? 0) > 1 && (
-        <div className="mt-5 bg-slate-800 rounded-2xl border border-slate-700 p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <ShoppingCart size={16} className="text-amber-400" />
-            <h3 className="text-sm font-bold text-slate-300">Performance par boutique — aujourd'hui</h3>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {(data?.boutiques ?? []).map((b: any, i: number) => (
-              <div key={i} className="bg-slate-700/50 rounded-xl p-3">
-                <div className="text-xs text-slate-400 truncate">{b.nom}</div>
-                <div className="text-lg font-black text-amber-400">{fmt(b.ca)} FCFA</div>
-                <div className="text-xs text-slate-500">{b.nb} vente{b.nb > 1 ? 's' : ''}</div>
-              </div>
-            ))}
-          </div>
+      {/* Comparatif multi-boutiques (7 jours) */}
+      <div className="mt-5 bg-slate-800 rounded-2xl border border-slate-700 p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <ShoppingCart size={16} className="text-amber-400" />
+          <h3 className="text-sm font-bold text-slate-300">Performance par boutique — 7 jours</h3>
         </div>
-      )}
+        {(data?.boutiques ?? []).length === 0 ? (
+          <p className="text-xs text-slate-500 text-center py-4">Aucune donnée</p>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-slate-400 text-left border-b border-slate-700">
+                    <th className="py-2 pr-4">Boutique</th>
+                    <th className="py-2 pr-4 text-right">CA</th>
+                    <th className="py-2 pr-4 text-right">Ventes</th>
+                    <th className="py-2 pr-4 text-right">Panier moyen</th>
+                    <th className="py-2 pr-4 text-right">Marge</th>
+                    <th className="py-2 text-right">Taux marge</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.boutiques ?? []).map((b: any, i: number) => (
+                    <tr key={i} className="border-b border-slate-700/50">
+                      <td className="py-2.5 pr-4 font-medium text-slate-200">{b.boutique}</td>
+                      <td className="py-2.5 pr-4 text-right text-amber-400 font-bold">{fmt(Number(b.ca ?? 0))} FCFA</td>
+                      <td className="py-2.5 pr-4 text-right text-slate-300">{b.nb_ventes ?? 0}</td>
+                      <td className="py-2.5 pr-4 text-right text-slate-300">{fmt(Number(b.panier_moyen ?? 0))} FCFA</td>
+                      <td className="py-2.5 pr-4 text-right text-emerald-400 font-semibold">{fmt(Number(b.marge ?? 0))} FCFA</td>
+                      <td className="py-2.5 text-right">
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${Number(b.taux_marge ?? 0) >= 0 ? 'bg-emerald-900/40 text-emerald-300' : 'bg-red-900/40 text-red-300'}`}>
+                          {Number(b.taux_marge ?? 0).toFixed(1)}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[10px] text-slate-600 mt-3">Les ventes des autres boutiques sont consolidées via la synchronisation inter-boutiques.</p>
+          </>
+        )}
+      </div>
     </div>
   )
 }

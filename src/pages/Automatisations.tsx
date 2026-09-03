@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { alertesGetRegles, alertesUpdateRegle, alertesRunAuto, getAlertes, marquerAlerteLue } from '@/lib/ipc'
-import { Bell, Settings, Play, Check, AlertTriangle, Package, CreditCard, Star, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import { alertesGetRegles, alertesUpdateRegle, alertesRunAuto, alertesSetAutoInterval, getAlertes, marquerAlerteLue, getParametres } from '@/lib/ipc'
+import { Bell, Settings, Play, Check, AlertTriangle, Package, CreditCard, Star, RefreshCw, ChevronDown, ChevronUp, Clock } from 'lucide-react'
 
 const TYPE_CONFIG: Record<string, { label: string; icon: JSX.Element; color: string; desc: string }> = {
   stock_faible: {
@@ -30,12 +30,16 @@ export default function Automatisations() {
   const [running, setRunning] = useState(false)
   const [lastRun, setLastRun] = useState<{ nouvelles: number; details: string[] } | null>(null)
   const [showAlertes, setShowAlertes] = useState(true)
+  const [intervalMin, setIntervalMin] = useState('30')
+  const [savingInterval, setSavingInterval] = useState(false)
 
   const load = async () => {
     try {
-      const [r, a] = await Promise.all([alertesGetRegles(), getAlertes(false)])
+      const [r, a, params] = await Promise.all([alertesGetRegles(), getAlertes(false), getParametres()])
       setRegles(r)
       setAlertes(a as any[])
+      const iv = (params as any)?.alerte_auto_interval_min
+      if (iv) setIntervalMin(String(iv))
     } catch {}
     setLoading(false)
   }
@@ -65,6 +69,15 @@ export default function Automatisations() {
   const markLue = async (id: number) => {
     await marquerAlerteLue(id)
     setAlertes(prev => prev.filter(a => a.id !== id))
+  }
+
+  const saveInterval = async () => {
+    setSavingInterval(true)
+    try {
+      const mins = Math.max(0, parseInt(intervalMin, 10) || 0)
+      await alertesSetAutoInterval(mins)
+    } catch {}
+    setSavingInterval(false)
   }
 
   const nonLues = alertes.filter(a => !a.lu)
@@ -115,6 +128,26 @@ export default function Automatisations() {
           )}
         </div>
       )}
+
+      {/* Exécution planifiée */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Clock size={16} className="text-gray-500" />
+          <h2 className="font-bold text-gray-800">Vérification automatique</h2>
+        </div>
+        <p className="text-sm text-gray-500 mb-4">Exécute automatiquement les règles à intervalle régulier et envoie les notifications desktop/email/SMS lorsqu'une nouvelle alerte est détectée (ex. stock faible).</p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="text-sm text-gray-600">Toutes les</label>
+          <input type="number" min={0} value={intervalMin}
+            onChange={e => setIntervalMin(e.target.value)}
+            className="w-24 border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-rose-300" />
+          <span className="text-sm text-gray-600">minutes{intervalMin === '0' ? ' — désactivé' : ''}</span>
+          <button onClick={saveInterval} disabled={savingInterval}
+            className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-700 disabled:opacity-50 transition-all">
+            {savingInterval ? 'Enregistrement...' : 'Enregistrer'}
+          </button>
+        </div>
+      </div>
 
       {/* Règles d'automatisation */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">

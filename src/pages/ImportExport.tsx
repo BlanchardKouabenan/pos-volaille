@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react'
-import { importerProduits, importerClients, exporterProduits, exporterVentes, exporterClients, importGetLog } from '@/lib/ipc'
+import { importerProduits, importerClients, exporterProduits, exporterVentes, exporterStock, exporterClients, importGetLog } from '@/lib/ipc'
 import { useAuthStore } from '@/store/authStore'
 import * as XLSX from 'xlsx'
-import { Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle, Package, Users, ShoppingBag, History } from 'lucide-react'
+import { Upload, Download, FileSpreadsheet, CheckCircle, AlertCircle, Package, Users, ShoppingBag, History, Boxes, Copy } from 'lucide-react'
 import { format, startOfMonth, endOfMonth } from 'date-fns'
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -15,7 +15,7 @@ export default function ImportExport() {
   const { user } = useAuthStore()
   const [tab, setTab] = useState<Tab>('import')
   const [importing, setImporting] = useState(false)
-  const [result, setResult] = useState<{ importees: number; erreurs: string[] } | null>(null)
+  const [result, setResult] = useState<{ importees: number; erreurs: string[]; doublonsFichier?: number; majExistantes?: number } | null>(null)
   const [exportDebut, setExportDebut] = useState(firstOfMonth())
   const [exportFin, setExportFin] = useState(lastOfMonth())
   const [log, setLog] = useState<any[]>([])
@@ -91,6 +91,11 @@ export default function ImportExport() {
     exportToXlsx(data, `clients_${today()}.xlsx`)
   }
 
+  const handleExportStock = async () => {
+    const data = await exporterStock()
+    exportToXlsx(data, `inventaire_stock_${today()}.xlsx`)
+  }
+
   const loadLog = async () => {
     if (logLoaded) return
     const l = await importGetLog()
@@ -142,9 +147,15 @@ export default function ImportExport() {
                   : <AlertCircle size={16} className="text-orange-600" />}
                 <span className={`font-semibold text-sm ${result.erreurs.length === 0 ? 'text-emerald-700' : 'text-orange-700'}`}>
                   {result.importees} ligne(s) importée(s)
+                  {result.majExistantes ? ` · ${result.majExistantes} mise(s) à jour` : ''}
                   {result.erreurs.length > 0 ? ` · ${result.erreurs.length} erreur(s)` : ''}
                 </span>
               </div>
+              {result.doublonsFichier ? (
+                <p className="text-xs text-amber-600 flex items-center gap-1 mt-1">
+                  <Copy size={11} /> {result.doublonsFichier} doublon(s) détecté(s) dans le fichier et ignoré(s)
+                </p>
+              ) : null}
               {result.erreurs.map((e, i) => (
                 <p key={i} className="text-xs text-orange-600 ml-6">• {e}</p>
               ))}
@@ -225,6 +236,21 @@ export default function ImportExport() {
               </div>
             </div>
             <button onClick={handleExportProduits}
+              className="flex items-center gap-2 bg-teal-600 text-white px-4 py-2.5 rounded-xl font-semibold text-sm hover:bg-teal-700 transition-all">
+              <Download size={16} /> Télécharger .xlsx
+            </button>
+          </div>
+
+          {/* Export stock / inventaire */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Boxes size={20} className="text-amber-500" />
+              <div>
+                <h2 className="font-bold text-gray-800">Stock / inventaire</h2>
+                <p className="text-sm text-gray-500">État des stocks avec valorisation et statut (rupture, stock bas)</p>
+              </div>
+            </div>
+            <button onClick={handleExportStock}
               className="flex items-center gap-2 bg-teal-600 text-white px-4 py-2.5 rounded-xl font-semibold text-sm hover:bg-teal-700 transition-all">
               <Download size={16} /> Télécharger .xlsx
             </button>

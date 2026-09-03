@@ -39,7 +39,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   getAllBoutiques, createBoutique, updateBoutique, deleteBoutique, getStatsBoutiqueConsolidee,
   getAlertesRegles, updateAlerteRegle, runAlertesAuto,
   importProduits, importClients,
-  exportProduitsList, exportVentesList, exportClientsList, getImportLog,
+  exportProduitsList, exportVentesList, exportClientsList, exportStockList, getImportLog,
   getAllEntrepots, createEntrepot, updateEntrepot, deleteEntrepot, getStockParEntrepot,
   getAllTransferts, getTransfertById, createTransfert, validerTransfert, annulerTransfert,
   getPrixAchatHistorique, getPrixAchatStatsProduits, getCommandePdfData,
@@ -57,6 +57,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
 } from './database'
 import http from 'http'
 import { printReceipt, generateReceiptText, openCashDrawer, buildPrinterInterface } from './printer'
+import { generateZpl, printZplFromString } from './zpl'
 import { sendSms, formatSmsTicket } from './sms'
 import { envoyerFondCaisseCloture, envoyerPointVenteHoraire, envoyerControleReleve, envoyerAlerteForfait, envoyerTestEmail, envoyerResumeJournalier, envoyerEtatInventaire, envoyerAlertesStock } from './reports'
 import { getForfaitInfo, prolongerForfaitLocal, appliquerLicence, genererLicence } from './license'
@@ -382,6 +383,24 @@ function stopAutoSync() {
   if (autoSyncInterval) { clearInterval(autoSyncInterval); autoSyncInterval = null }
 }
 
+let alertSchedulerInterval: NodeJS.Timeout | null = null
+
+// Exécution planifiée des règles d'alertes (stock faible, ardoises, fidélité)
+// envoie les notifications desktop à chaque détection de nouvelles alertes
+function startAlertScheduler() {
+  if (alertSchedulerInterval) { clearInterval(alertSchedulerInterval); alertSchedulerInterval = null }
+  const minutes = parseInt(getAllParametres()?.alerte_auto_interval_min || '30', 10)
+  if (isNaN(minutes) || minutes <= 0) return
+  const run = () => {
+    try {
+      const result = runAlertesAuto()
+      if (result) notifyAlertResults(result.details)
+    } catch {}
+  }
+  run()
+  alertSchedulerInterval = setInterval(run, minutes * 60 * 1000)
+}
+
 app.whenReady().then(async () => {
   await initDatabase()
   // Initialiser le dossier backup selon params
@@ -390,6 +409,7 @@ app.whenReady().then(async () => {
   startAutoBackup()
   startEmailScheduler()
   startAutoSync()
+  startAlertScheduler()
   // Configurer les notifications desktop selon les paramètres
   try {
     const p = getAllParametres()
@@ -552,6 +572,19 @@ ipcMain.handle('imprimantes:list', () => {
   } catch (err: any) {
     console.log('[Imprimantes] Énumération échouée:', err.message)
     return []
+  }
+})
+
+// Impression d'étiquettes en ZPL sur une étiqueteuse thermique (imprimante par nom Windows)
+ipcMain.handle('etiquette:printZpl', async (_e, items: any[], printerName: string) => {
+  try {
+    if (items && items.length && printerName) {
+      const zpl = generateZpl(items)
+      return await printZplFromString(zpl, printerName)
+    }
+    return { success: false, error: 'Paramètres manquants (étiquettes ou imprimante non sélectionnée)' }
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) }
   }
 })
 
@@ -854,6 +887,12 @@ ipcMain.handle('boutique:statsConsolidees', (_e, dateDebut: string, dateFin: str
 ipcMain.handle('alertes:getRegles', () => getAlertesRegles())
 ipcMain.handle('alertes:updateRegle', (_e, id: number, data: any) => updateAlerteRegle(id, data))
 ipcMain.handle('alertes:runAuto', () => runAlertesAuto())
+
+ipcMain.handle('alertes:setAutoInterval', (_e, minutes: number) => {
+  setParametre('alerte_auto_interval_min', String(minutes))
+  startAlertScheduler()
+  return { ok: true }
+})
 ipcMain.handle('notif:configure', (_e, enabled: { [K: string]: boolean }) => {
   configureNotifications(enabled)
   return true
@@ -864,6 +903,7 @@ ipcMain.handle('import:produits', (_e, lignes: any[], userId?: number) => import
 ipcMain.handle('import:clients', (_e, lignes: any[], userId?: number) => importClients(lignes, userId))
 ipcMain.handle('export:produits', () => exportProduitsList())
 ipcMain.handle('export:ventes', (_e, dateDebut: string, dateFin: string) => exportVentesList(dateDebut, dateFin))
+ipcMain.handle('export:stock', () => exportStockList())
 ipcMain.handle('export:clients', () => exportClientsList())
 ipcMain.handle('import:getLog', () => getImportLog())
 

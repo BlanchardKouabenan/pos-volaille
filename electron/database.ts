@@ -1045,6 +1045,8 @@ function seedData() {
     ['notif_ardoise', '1'],
     ['notif_fidelite', '1'],
     ['notif_rapport', '1'],
+    // Exécution planifiée des alertes auto (0 = désactivé, sinon minutes)
+    ['alerte_auto_interval_min', '30'],
   ]
   for (const [cle, valeur] of defaults) {
     db.run('INSERT OR IGNORE INTO parametres (cle, valeur) VALUES (?, ?)', [cle, valeur])
@@ -1376,12 +1378,26 @@ export function getVenteStats(dateDebut: string, dateFin: string) {
   )
 
   const topProduits = queryAll(
-    `SELECT COALESCE(vl.nom_libre, p.nom) as nom, SUM(vl.quantite) as qte_vendue, SUM(vl.total_ligne) as ca
+    `SELECT COALESCE(vl.nom_libre, p.nom) as nom, SUM(vl.quantite) as qte_vendue, SUM(vl.total_ligne) as ca,
+            COALESCE(SUM(vl.quantite * COALESCE(p.prix_achat, 0)), 0) as cout,
+            SUM(vl.total_ligne) - COALESCE(SUM(vl.quantite * COALESCE(p.prix_achat, 0)), 0) as marge
      FROM vente_lignes vl
      JOIN ventes v ON vl.vente_id = v.id
      LEFT JOIN produits p ON vl.produit_id = p.id
      WHERE v.statut='completed' AND date(v.date) BETWEEN ? AND ?
      GROUP BY COALESCE(vl.nom_libre, p.nom) ORDER BY ca DESC LIMIT 10`,
+    [dateDebut, dateFin]
+  )
+
+  // Marge brute totale sur la période (CA - coût des ventes)
+  const marge = queryOne(
+    `SELECT
+       COALESCE(SUM(vl.total_ligne), 0) as ca,
+       COALESCE(SUM(vl.quantite * COALESCE(p.prix_achat, 0)), 0) as cout
+     FROM vente_lignes vl
+     JOIN ventes v ON vl.vente_id = v.id
+     LEFT JOIN produits p ON vl.produit_id = p.id
+     WHERE v.statut='completed' AND date(v.date) BETWEEN ? AND ?`,
     [dateDebut, dateFin]
   )
 
@@ -1392,7 +1408,7 @@ export function getVenteStats(dateDebut: string, dateFin: string) {
     [dateDebut, dateFin]
   )
 
-  return { totalVentes, parModePaiement, topProduits, parJour }
+  return { totalVentes, parModePaiement, topProduits, parJour, marge }
 }
 
 // Ventes de la dernière heure (pour l'envoi horaire "point de vente")
@@ -3522,10 +3538,10 @@ export function deleteBoutique(id: number) {
 }
 
 export function getStatsBoutiqueConsolidee(dateDebut: string, dateFin: string) {
-  return queryAll(`
+  const rows = queryAll(`
     SELECT b.nom as boutique, b.id as boutique_id,
-           COUNT(v.id) as nb_ventes, SUM(v.total) as ca,
-           AVG(v.total) as panier_moyen
+           COUNT(DISTINCT v.id) as nb_ventes, COALESCE(SUM(DISTINCT v.total),0) as ca,
+           COALESCE(AVG(v.total),0) as panier_moyen
     FROM boutiques b
     LEFT JOIN ventes v ON (v.boutique_id = b.id OR (v.boutique_id IS NULL AND b.id = 1))
       AND v.statut != 'annule'
@@ -3533,6 +3549,31 @@ export function getStatsBoutiqueConsolidee(dateDebut: string, dateFin: string) {
     WHERE b.actif = 1
     GROUP BY b.id ORDER BY ca DESC
   `, [dateDebut, dateFin])
+
+  // Marge + top produit par boutique (via jointure sur lignes)
+  const marges = queryAll(`
+    SELECT v.boutique_id as bid,
+           COALESCE(SUM(vl.quantite * COALESCE(p.prix_achat,0)),0) as cout,
+           COALESCE(SUM(vl.total_ligne),0) as ca_lignes
+    FROM ventes v
+    LEFT JOIN vente_lignes vl ON vl.vente_id = v.id
+    LEFT JOIN produits p ON vl.produit_id = p.id
+    WHERE v.statut != 'annule' AND date(v.date) >= ? AND date(v.date) <= ?
+    GROUP BY v.boutique_id
+  `, [dateDebut, dateFin])
+
+  return rows.map((r: any) => {
+    const bid = r.boutique_id ?? 1
+    const m = marges.find((x: any) => (x.bid ?? 1) === bid)
+    const cout = Number(m?.cout ?? 0)
+    const caL = Number(m?.ca_lignes ?? 0)
+    return {
+      ...r,
+      cout,
+      marge: caL - cout,
+      taux_marge: caL > 0 ? ((caL - cout) / caL) * 100 : 0
+    }
+  })
 }
 
 // ─── ALERTES AUTOMATISÉES ─────────────────────────────────────────────────────
@@ -3630,9 +3671,16 @@ export function importProduits(lignes: {
 }[], userId?: number): { importees: number; erreurs: string[] } {
   let importees = 0
   const erreurs: string[] = []
+  let doublonsFichier = 0
+  let majExistantes = 0
+  const vus = new Set<string>()
   for (const l of lignes) {
     try {
       if (!l.nom || !l.prix_vente) { erreurs.push(`Ligne invalide: nom ou prix manquant`); continue }
+      // Détection des doublons au sein du fichier importé
+      const cle = (l.code_barre || l.nom.trim().toLowerCase())
+      if (vus.has(cle)) { doublonsFichier++; continue }
+      vus.add(cle)
       // Trouver ou créer catégorie
       let catId: number | null = null
       if (l.categorie_nom) {
@@ -3648,6 +3696,7 @@ export function importProduits(lignes: {
         ? queryOne('SELECT id FROM produits WHERE code_barre = ?', [l.code_barre])
         : queryOne('SELECT id FROM produits WHERE nom = ?', [l.nom])
       if (existing) {
+        majExistantes++
         db.run(`UPDATE produits SET nom=?, prix_vente=?, prix_achat=COALESCE(?,prix_achat),
           stock_actuel=COALESCE(?,stock_actuel), stock_minimum=COALESCE(?,stock_minimum),
           unite=COALESCE(?,unite), categorie_id=COALESCE(?,categorie_id) WHERE id=?`,
@@ -3669,7 +3718,7 @@ export function importProduits(lignes: {
     try { runWrite('INSERT INTO import_log (type, nb_lignes, nb_erreurs, user_id) VALUES (?,?,?,?)',
       ['produits', importees, erreurs.length, userId]) } catch {}
   }
-  return { importees, erreurs }
+  return { importees, erreurs, doublonsFichier, majExistantes }
 }
 
 export function importClients(lignes: {
@@ -3702,6 +3751,24 @@ export function exportProduitsList() {
            p.stock_actuel, p.stock_minimum, p.unite, p.code_barre, p.actif
     FROM produits p LEFT JOIN categories c ON p.categorie_id = c.id
     WHERE p.actif = 1 ORDER BY c.nom, p.nom
+  `, [])
+}
+
+// Export de l'état des stocks / inventaire (avec valorisation et statut)
+export function exportStockList() {
+  return queryAll(`
+    SELECT p.nom, c.nom as categorie, p.stock_actuel, p.stock_minimum, p.unite,
+           p.prix_achat, p.prix_vente,
+           ROUND(p.stock_actuel * p.prix_achat, 0) as valeur_achat,
+           ROUND(p.stock_actuel * p.prix_vente, 0) as valeur_vente,
+           CASE
+             WHEN p.stock_actuel <= 0 THEN 'Rupture'
+             WHEN p.stock_minimum > 0 AND p.stock_actuel <= p.stock_minimum THEN 'Stock bas'
+             ELSE 'OK'
+           END as statut
+    FROM produits p LEFT JOIN categories c ON p.categorie_id = c.id
+    WHERE p.actif = 1
+    ORDER BY statut, c.nom, p.nom
   `, [])
 }
 
@@ -4051,6 +4118,8 @@ export function markSyncedIds(ids: number[]) {
 export function getDashboardProprietaireData() {
   const today = new Date().toISOString().slice(0, 10)
   const firstDayMonth = today.slice(0, 8) + '01'
+  const d7 = new Date(); d7.setDate(d7.getDate() - 6)
+  const sub7 = d7.toISOString().slice(0, 10)
 
   const statsDuJour = queryOne(`
     SELECT COALESCE(SUM(total),0) as ca, COUNT(*) as nb_ventes,
@@ -4105,14 +4174,8 @@ export function getDashboardProprietaireData() {
     GROUP BY mode ORDER BY montant DESC
   `, [today, today])
 
-  const boutiques = queryAll(`
-    SELECT b.nom,
-      COALESCE(SUM(v.total),0) as ca,
-      COUNT(v.id) as nb
-    FROM boutiques b
-    LEFT JOIN ventes v ON v.boutique_id=b.id AND v.statut='completed' AND date(v.date)=?
-    GROUP BY b.id ORDER BY ca DESC
-  `, [today])
+  // Comparatif multi-boutiques (côté à côté) avec marge/taux — 7 jours pour plus de sens
+  const boutiques = getStatsBoutiqueConsolidee(sub7, today)
 
   return {
     today,

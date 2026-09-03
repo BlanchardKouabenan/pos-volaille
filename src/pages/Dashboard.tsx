@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuthStore } from '@/store/authStore'
 import { useSessionStore } from '@/store/sessionStore'
 import { getStatsDuJour, getVenteStats, getLowStockProduits, formatCurrency } from '@/lib/ipc'
 import {
-  LayoutDashboard, TrendingUp, ShoppingBag, Receipt, Wallet, Package,
-  AlertTriangle, ArrowRight, ChevronRight
+  LayoutDashboard, TrendingUp, ShoppingBag, Receipt, Wallet, Package, Percent,
+  AlertTriangle, ArrowRight, ChevronRight, RefreshCw
 } from 'lucide-react'
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -26,19 +26,27 @@ export default function Dashboard() {
   const [week, setWeek] = useState<any>(null)
   const [lowStock, setLowStock] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [lastRefresh, setLastRefresh] = useState('')
 
-  useEffect(() => {
-    Promise.all([
+  const fetchData = useCallback(async () => {
+    const [j, w, ls] = await Promise.all([
       getStatsDuJour(),
       getVenteStats(sub(6), today()),
       getLowStockProduits().catch(() => [])
-    ]).then(([j, w, ls]) => {
-      setJour(j)
-      setWeek(w)
-      setLowStock(ls)
-      setLoading(false)
-    }).catch(() => setLoading(false))
+    ])
+    setJour(j)
+    setWeek(w)
+    setLowStock(ls)
+    setLastRefresh(new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
   }, [])
+
+  useEffect(() => {
+    setLoading(true)
+    fetchData().catch(() => {}).finally(() => setLoading(false))
+    // Auto-refresh temps réel toutes les 15s
+    const t = setInterval(() => { fetchData().catch(() => {}) }, 15000)
+    return () => clearInterval(t)
+  }, [fetchData])
 
   if (loading) {
     return (
@@ -51,6 +59,12 @@ export default function Dashboard() {
   const ca = Number(jour?.ca ?? 0)
   const nb = Number(jour?.nb_ventes ?? 0)
   const panier = nb > 0 ? ca / nb : 0
+
+  // Marge brute (7 jours) + taux
+  const caSemaine = Number(week?.marge?.ca ?? 0)
+  const coutSemaine = Number(week?.marge?.cout ?? 0)
+  const margeSemaine = caSemaine - coutSemaine
+  const tauxMarge = caSemaine > 0 ? (margeSemaine / caSemaine) * 100 : 0
 
   // Variation CA vs hier
   const parJourMap = new Map((week?.parJour ?? []).map((d: any) => [d.jour, Number(d.ca ?? 0)]))
@@ -66,6 +80,7 @@ export default function Dashboard() {
     { label: "Chiffre d'affaires du jour", value: formatCurrency(ca, 'FCFA'), icon: <TrendingUp size={22} />, color: 'from-emerald-400 to-emerald-600' },
     { label: 'Ventes du jour', value: fmtN(nb), icon: <ShoppingBag size={22} />, color: 'from-blue-400 to-blue-600' },
     { label: 'Panier moyen', value: formatCurrency(panier, 'FCFA'), icon: <Receipt size={22} />, color: 'from-purple-400 to-purple-600' },
+    { label: 'Marge brute (7j)', value: formatCurrency(margeSemaine, 'FCFA'), icon: <Percent size={22} />, color: 'from-indigo-400 to-indigo-600' },
     { label: 'Fond de caisse (session)', value: formatCurrency(Number(jour?.fond_caisse ?? 0), 'FCFA'), icon: <Wallet size={22} />, color: 'from-amber-400 to-amber-600' },
   ]
 
@@ -78,7 +93,12 @@ export default function Dashboard() {
             {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })} — Bonjour {user?.nom}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {lastRefresh && (
+            <span className="h-8 px-3 bg-gray-100 border border-gray-200 text-gray-500 rounded-xl flex items-center gap-1.5 text-xs font-medium">
+              <RefreshCw size={12} className="animate-spin" /> Temps réel · {lastRefresh}
+            </span>
+          )}
           <Link to="/caisse" className="h-12 px-5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl flex items-center gap-2 font-semibold text-sm transition-all">
             <LayoutDashboard size={18} /> Ouvrir la caisse
           </Link>
@@ -89,7 +109,7 @@ export default function Dashboard() {
       </div>
 
       {/* KPI */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
         {kpis.map((k, i) => (
           <div key={i} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
             <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${k.color} flex items-center justify-center text-white mb-3`}>
@@ -107,11 +127,18 @@ export default function Dashboard() {
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 lg:col-span-2">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-bold text-gray-800 flex items-center gap-2"><TrendingUp size={18} className="text-emerald-600" /> Évolution du CA — 7 jours</h2>
-            {variation !== null && (
-              <span className={`text-sm font-bold px-3 py-1 rounded-full ${variation >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
-                {variation >= 0 ? '▲' : '▼'} {Math.abs(variation).toFixed(1)}% vs hier
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {caSemaine > 0 && (
+                <span className="text-sm font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-600">
+                  Marge {tauxMarge.toFixed(1)}%
+                </span>
+              )}
+              {variation !== null && (
+                <span className={`text-sm font-bold px-3 py-1 rounded-full ${variation >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
+                  {variation >= 0 ? '▲' : '▼'} {Math.abs(variation).toFixed(1)}% vs hier
+                </span>
+              )}
+            </div>
           </div>
           {(week?.parJour ?? []).length === 0 ? (
             <p className="text-gray-400 text-sm text-center py-10">Aucune donnée sur la période</p>
@@ -186,7 +213,7 @@ export default function Dashboard() {
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div className="h-full bg-gradient-to-r from-emerald-400 to-emerald-600 rounded-full" style={{ width: `${(Number(p.ca ?? 0) / maxProdCa) * 100}%` }} />
                     </div>
-                    <span className="text-xs text-gray-400">{fmtN(p.qte_vendue)} vendus</span>
+                    <span className="text-xs text-gray-400">{fmtN(p.qte_vendue)} vendus · marge <span className="font-semibold text-emerald-600">{formatCurrency(Number(p.marge ?? 0), 'FCFA')}</span>{Number(p.ca ?? 0) > 0 && <span className="ml-1">({Math.round((Number(p.marge ?? 0) / Number(p.ca ?? 0)) * 100)}%)</span>}</span>
                   </div>
                 </div>
               ))}

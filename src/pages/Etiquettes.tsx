@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef } from 'react'
-import { getProduits, getParametres } from '@/lib/ipc'
+import { getProduits, getParametres, listeImprimantes, imprimerEtiquettesZpl } from '@/lib/ipc'
 import type { Produit } from '@/types'
-import { Tag, Printer, Search, Check, X, Plus, Minus } from 'lucide-react'
+import { Tag, Printer, Search, Check, X, Plus, Minus, Zap, Loader } from 'lucide-react'
 
 // ─── Générateur CODE128 (subset B) ───────────────────────────────────────────
 const CODE128B_TABLE: Record<string, number> = {}
@@ -95,12 +95,19 @@ export default function Etiquettes() {
   const [nomEntreprise, setNomEntreprise] = useState('KB POS')
   const [loading, setLoading] = useState(true)
   const printRef = useRef<HTMLDivElement>(null)
+  const [thermalPrinters, setThermalPrinters] = useState<string[]>([])
+  const [zplPrinter, setZplPrinter] = useState('')
+  const [zplPrinting, setZplPrinting] = useState(false)
+  const [zplError, setZplError] = useState('')
 
   useEffect(() => {
-    Promise.all([getProduits(), getParametres()])
-      .then(([p, params]) => {
+    Promise.all([getProduits(), getParametres(), listeImprimantes().catch(() => [])])
+      .then(([p, params, imp]) => {
         setProduits(p as Produit[])
         if ((params as any)?.nom_entreprise) setNomEntreprise((params as any).nom_entreprise)
+        const names = (imp as any[]).map((x: any) => x.name).filter(Boolean)
+        setThermalPrinters(names)
+        setZplPrinter(names[0] || '')
       })
       .catch(() => {})
       .finally(() => setLoading(false))
@@ -158,6 +165,30 @@ export default function Etiquettes() {
     win.document.close()
     win.focus()
     setTimeout(() => { win.print(); win.close() }, 300)
+  }
+
+  const handleZplPrint = async () => {
+    if (!thermalPrinters.length || !zplPrinter) {
+      setZplError('Aucune imprimante détectée. Vérifiez que votre étiqueteuse est installée sur Windows.')
+      return
+    }
+    setZplPrinting(true)
+    setZplError('')
+    try {
+      const items = selection.map(s => ({
+        nom: s.produit.nom,
+        prix: showPrix ? s.produit.prix_vente : undefined,
+        code_barre: s.produit.code_barre || undefined,
+        entreprise: nomEntreprise,
+        monnaie: 'FCFA',
+        copies: s.quantite
+      }))
+      const res = await imprimerEtiquettesZpl(items, zplPrinter)
+      if (!res?.success) setZplError(res?.error || 'Erreur d’impression')
+    } catch (e: any) {
+      setZplError(e?.message || String(e))
+    }
+    setZplPrinting(false)
   }
 
   return (
@@ -271,6 +302,31 @@ export default function Etiquettes() {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Impression directe sur étiqueteuse thermique (ZPL) */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="min-w-[220px] flex-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-1.5">Étiqueteuse thermique (ZPL)</label>
+                {thermalPrinters.length === 0 ? (
+                  <p className="text-xs text-gray-400">Aucune imprimante détectée sur ce PC</p>
+                ) : (
+                  <select value={zplPrinter} onChange={e => setZplPrinter(e.target.value)}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-300">
+                    {thermalPrinters.map((n, i) => <option key={i} value={n}>{n}</option>)}
+                  </select>
+                )}
+              </div>
+              <div>
+                <button onClick={handleZplPrint} disabled={!etiquettes.length || !zplPrinter || zplPrinting}
+                  className="flex items-center gap-2 bg-gray-900 text-white px-5 py-2.5 rounded-xl font-semibold text-sm hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                  {zplPrinting ? <Loader size={16} className="animate-spin" /> : <Zap size={16} />}
+                  Impression directe
+                </button>
+              </div>
+            </div>
+            {zplError && <p className="text-xs text-red-500 mt-2 flex items-center gap-1"><X size={11} /> {zplError}</p>}
           </div>
 
           {/* Aperçu */}
