@@ -131,6 +131,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     get: () => ipcRenderer.invoke('profile:get'),
     list: () => ipcRenderer.invoke('profile:list'),
     apply: (id: string, opts?: { remplacerCatalogue?: boolean }) => ipcRenderer.invoke('profile:apply', id, opts),
+    listApplied: () => ipcRenderer.invoke('profile:listApplied'),
+    add: (id: string) => ipcRenderer.invoke('profile:add', id),
+    remove: (id: string) => ipcRenderer.invoke('profile:remove', id),
   },
   attributs: {
     list: (actifsSeulement?: boolean) => ipcRenderer.invoke('attributs:list', actifsSeulement),

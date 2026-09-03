@@ -1439,6 +1439,75 @@ export function syncRemoteCatalog(produits: any[], variantes: any[]) {
   return { ajoutes, majes }
 }
 
+// ─── RÉPLICATION DE CONFIGURATION (serveur → client) ───────────────────────
+// Le serveur expose toute sa configuration via /api/rt/config, et les clients
+// l'appliquent pour hériter des types de commerce, paramètres, attributs, etc.
+
+export function getRemoteConfig() {
+  const params = getAllParametres()
+  const profils = getProfilsAppliques()
+  const attributs = listAttributsActifs()
+  const unites = queryAll('SELECT nom, symbole, pesable FROM unites ORDER BY id')
+  const categories = queryAll('SELECT id, nom, couleur, icone FROM categories ORDER BY id')
+  const methodesPaiement = queryAll('SELECT code, nom, actif FROM methodes_paiement ORDER BY id')
+  return {
+    profils_appliques: profils,
+    parametres: {
+      profil_commerce: params.profil_commerce ?? '',
+      monnaie: params.monnaie ?? 'FCFA',
+      tva_taux: params.tva_taux ?? '0',
+      unite_defaut: params.unite_defaut ?? 'pièce',
+      modes_paiement_actifs: params.modes_paiement_actifs ?? '[]',
+      modules_actifs: params.modules_actifs ?? '{}',
+      nom_entreprise: params.nom_entreprise ?? 'Mon Commerce',
+      adresse: params.adresse ?? '',
+      telephone: params.telephone ?? '',
+      email: params.email ?? '',
+      receipt_header: params.receipt_header ?? 'Bienvenue !',
+      receipt_footer: params.receipt_footer ?? 'Merci de votre visite !',
+    },
+    attributs,
+    unites,
+    categories,
+    methodes_paiement: methodesPaiement,
+  }
+}
+
+export function applyRemoteConfig(config: ReturnType<typeof getRemoteConfig>) {
+  if (!config) return
+  // Paramètres métier
+  for (const [cle, valeur] of Object.entries(config.parametres)) {
+    if (valeur !== undefined && valeur !== null && valeur !== '') setParametre(cle, String(valeur))
+  }
+  // Profils appliqués
+  if (config.profils_appliques?.length) {
+    setParametre('profils_appliques', JSON.stringify(config.profils_appliques))
+  }
+  // Catégories (créer celles qui manquent)
+  for (const cat of config.categories ?? []) {
+    const existing = queryOne('SELECT id FROM categories WHERE nom = ?', [cat.nom])
+    if (!existing) db.run('INSERT OR IGNORE INTO categories (nom, couleur, icone) VALUES (?, ?, ?)', [cat.nom, cat.couleur, cat.icone])
+  }
+  // Attributs + valeurs
+  for (const attr of config.attributs ?? []) {
+    db.run('INSERT OR IGNORE INTO attributs (nom, actif) VALUES (?, 1)', [attr.nom])
+    const row = queryOne('SELECT id FROM attributs WHERE nom = ?', [attr.nom])
+    if (!row) continue
+    for (const val of attr.valeurs ?? []) {
+      db.run('INSERT OR IGNORE INTO attribut_valeurs (attribut_id, label, ordre) VALUES (?, ?, ?)', [row.id, val.label, val.ordre])
+    }
+  }
+  // Unités
+  for (const u of config.unites ?? []) {
+    db.run('INSERT OR IGNORE INTO unites (nom, symbole, pesable) VALUES (?, ?, ?)', [u.nom, u.symbole, u.pesable ? 1 : 0])
+  }
+  // Modes de paiement
+  for (const m of config.methodes_paiement ?? []) {
+    db.run('UPDATE methodes_paiement SET actif = ? WHERE code = ?', [m.actif ? 1 : 0, m.code])
+  }
+  saveDb()
+}
+
 export function getVentes(dateDebut?: string, dateFin?: string, limit = 200) {
   let query = `
     SELECT v.*, u.nom as caissier_nom, c.nom as client_nom
@@ -1667,6 +1736,11 @@ export function setParametres(params: Record<string, string>) {
     db.run('INSERT OR REPLACE INTO parametres (cle, valeur) VALUES (?, ?)', [cle, valeur])
   }
   saveDb()
+}
+
+export function getParametre(cle: string): string | null {
+  const row = queryOne('SELECT valeur FROM parametres WHERE cle = ?', [cle])
+  return row?.valeur ?? null
 }
 
 export interface ForfaitInfo {
@@ -2040,6 +2114,157 @@ export function getModulesActifs(): Record<string, boolean> | null {
   } catch {
     return null
   }
+}
+
+// ─── MULTI-PROFILS (types de commerce multiples par magasin) ───────────────
+// Stocke la liste des types de commerce appliqués dans `profils_appliques` (JSON array).
+// Le premier profil de la liste est le "principal" qui pilote monnaie/TVA/unite_defaut.
+// Les profils suivants étendent le catalogue (catégories + produits + attributs) et
+// fusionnent les modules/modes de paiement (union).
+
+export interface ProfilApplique { id: string; label: string; applique_le?: string }
+
+export function getProfilsAppliques(): ProfilApplique[] {
+  const raw = getParametre('profils_appliques')
+  if (!raw) {
+    const old = getProfileCommerce()
+    if (old) {
+      const list: ProfilApplique[] = [{ id: old.id, label: old.label, applique_le: old.applique_le }]
+      setParametre('profils_appliques', JSON.stringify(list))
+      return list
+    }
+    return []
+  }
+  try {
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr : []
+  } catch { return [] }
+}
+
+function seedCatalogueAdditif(profilId: string) {
+  const prof = PROFILS.find(p => p.id === profilId)
+  if (!prof) return
+  const catIds: Record<string, number> = {}
+  for (const c of prof.categories ?? []) {
+    const existing = queryOne('SELECT id FROM categories WHERE nom = ?', [c.nom])
+    if (existing) { catIds[c.nom] = existing.id }
+    else {
+      const r = runWrite('INSERT INTO categories (nom, couleur, icone) VALUES (?, ?, ?)', [c.nom, c.couleur, c.icone])
+      catIds[c.nom] = r.lastInsertRowid
+    }
+  }
+  if (prof.attributs?.length) seedAttributs(prof.attributs)
+  const attrsIds = (prof.attributs ?? []).map(a => {
+    const row = queryOne('SELECT id FROM attributs WHERE nom = ?', [a.nom])
+    return row?.id
+  }).filter((x): x is number => x != null)
+  const existingBarcodes = (queryAll('SELECT code_barre FROM produits WHERE code_barre IS NOT NULL') as { code_barre: string }[]).map(r => r.code_barre)
+  for (const p of prof.produits ?? []) {
+    if (p.code_barre && existingBarcodes.includes(p.code_barre)) continue
+    const catId = catIds[p.categorie]
+    if (!catId) continue
+    db.run(
+      'INSERT INTO produits (nom, categorie_id, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, code_barre, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [p.nom, catId, p.prix_vente, p.prix_achat, p.unite, p.stock_actuel, p.stock_minimum, p.code_barre ?? null, p.image_url]
+    )
+    const produitId = db.exec('SELECT last_insert_rowid() as r')[0]?.values[0]?.[0] as number
+    if (attrsIds.length) {
+      for (const attrId of attrsIds) {
+        db.run('INSERT OR IGNORE INTO attributs_produit (produit_id, attribut_id, valeur_id) VALUES (?, ?, NULL)', [produitId, attrId])
+      }
+    }
+    seedVariantesProduit(produitId, p.variantes)
+  }
+}
+
+export function addProfileType(id: string): ProfilApplique {
+  const prof = PROFILS.find(p => p.id === id)
+  if (!prof) throw new Error('Profil de commerce inconnu : ' + id)
+  const list = getProfilsAppliques()
+  if (list.some(p => p.id === id)) {
+    const existing = list.find(p => p.id === id)!
+    return existing
+  }
+  const applique_le = new Date().toISOString()
+  const entry: ProfilApplique = { id: prof.id, label: prof.label, applique_le }
+  list.push(entry)
+  setParametre('profils_appliques', JSON.stringify(list))
+
+  if (list.length === 1) {
+    setParametre('profil_commerce', JSON.stringify({ id: prof.id, label: prof.label, applique_le }))
+    setParametre('monnaie', prof.devise)
+    setParametre('tva_taux', String(prof.tva_defaut))
+    setParametre('unite_defaut', prof.unite_defaut)
+    setParametre('modes_paiement_actifs', JSON.stringify(prof.mode_paiements))
+    setParametre('modules_actifs', JSON.stringify(prof.modules))
+    try {
+      const allModes = queryAll('SELECT code FROM methodes_paiement')
+      for (const m of allModes) db.run('UPDATE methodes_paiement SET actif = ? WHERE code = ?', [prof.mode_paiements.includes(m.code) ? 1 : 0, m.code])
+    } catch {}
+    const unitesDef: [string, string, number][] = prof.unites.map(u => [u.nom, u.symbole, u.pesable ? 1 : 0])
+    for (const [nom, symbole, pesable] of unitesDef) db.run('INSERT OR IGNORE INTO unites (nom, symbole, pesable) VALUES (?, ?, ?)', [nom, symbole, pesable])
+    if (prof.attributs?.length) seedAttributs(prof.attributs)
+    const profCats = (prof.categories ?? []).map(c => c.nom)
+    const existingCats = (queryAll('SELECT nom FROM categories') as { nom: string }[]).map(r => r.nom)
+    const noCatalogue = existingCats.length === 0
+    const typologieEtrangere = !noCatalogue && profCats.length > 0 && !profCats.some(n => existingCats.includes(n))
+    if (typologieEtrangere && existingCats.length > 0) {
+      db.run('PRAGMA foreign_keys = OFF')
+      db.run('DELETE FROM variantes_produit')
+      db.run('DELETE FROM attributs_produit')
+      db.run('DELETE FROM produits')
+      db.run('DELETE FROM categories')
+      db.run('PRAGMA foreign_keys = ON')
+    }
+    const catCount = queryOne('SELECT COUNT(*) as c FROM categories', [])?.c ?? 0
+    if (catCount === 0 && prof.categories?.length) seedCatalogue(prof)
+    try { reconcilierVariantesProfile(prof) } catch {}
+  } else {
+    // Profil additionnel : fusion des modules/modes + catalogue additif
+    const existingModules = JSON.parse(getParametre('modules_actifs') || '{}') as Record<string, boolean>
+    const merged: Record<string, boolean> = {}
+    for (const mod of Object.keys(prof.modules)) merged[mod] = existingModules[mod] || prof.modules[mod as keyof typeof prof.modules]
+    setParametre('modules_actifs', JSON.stringify(merged))
+
+    const existingModes: string[] = JSON.parse(getParametre('modes_paiement_actifs') || '[]')
+    const mergedModes = [...new Set([...existingModes, ...prof.mode_paiements])]
+    setParametre('modes_paiement_actifs', JSON.stringify(mergedModes))
+
+    try {
+      const allModes = queryAll('SELECT code FROM methodes_paiement')
+      for (const m of allModes) db.run('UPDATE methodes_paiement SET actif = ? WHERE code = ?', [mergedModes.includes(m.code) ? 1 : 0, m.code])
+    } catch {}
+
+    const unitesDef: [string, string, number][] = prof.unites.map(u => [u.nom, u.symbole, u.pesable ? 1 : 0])
+    for (const [nom, symbole, pesable] of unitesDef) db.run('INSERT OR IGNORE INTO unites (nom, symbole, pesable) VALUES (?, ?, ?)', [nom, symbole, pesable])
+    if (prof.attributs?.length) seedAttributs(prof.attributs)
+    seedCatalogueAdditif(id)
+    try { reconcilierVariantesProfile(prof) } catch {}
+  }
+  saveDb()
+  return entry
+}
+
+export function removeProfileType(id: string): boolean {
+  const list = getProfilsAppliques()
+  const idx = list.findIndex(p => p.id === id)
+  if (idx < 0) return false
+  list.splice(idx, 1)
+  setParametre('profils_appliques', JSON.stringify(list))
+  if (idx === 0 && list.length > 0) {
+    const next = list[0]
+    const prof = PROFILS.find(p => p.id === next.id)
+    if (prof) {
+      setParametre('profil_commerce', JSON.stringify({ id: prof.id, label: prof.label, applique_le: next.applique_le }))
+      setParametre('monnaie', prof.devise)
+      setParametre('tva_taux', String(prof.tva_defaut))
+      setParametre('unite_defaut', prof.unite_defaut)
+      setParametre('modes_paiement_actifs', JSON.stringify(prof.mode_paiements))
+      setParametre('modules_actifs', JSON.stringify(prof.modules))
+    }
+  }
+  saveDb()
+  return true
 }
 
 // ─── ALERTES ──────────────────────────────────────────────────────────────────

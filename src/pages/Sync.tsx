@@ -4,7 +4,8 @@ import {
   syncPushTo, syncPullFrom,
   syncStartServer, syncStopServer, syncIsRunning, syncGetLocalIp,
   syncGetJournal, syncSetAutoInterval, getParametres,
-  rtSetRole, rtGetStatus
+  rtSetRole, rtGetStatus,
+  profilList, profilListApplied, profilAdd
 } from '@/lib/ipc'
 import { RefreshCw, Plus, Trash2, Upload, Download, Wifi, WifiOff, Globe, X, Check, AlertCircle, Server, Monitor, Network, Loader } from 'lucide-react'
 
@@ -36,11 +37,18 @@ export default function Sync() {
   const [rtMsg, setRtMsg] = useState('')
   const [rtTesting, setRtTesting] = useState(false)
 
+  // Types de commerce du magasin (multi-types, config serveur → clients)
+  const [applied, setApplied] = useState<any[]>([])
+  const [profList, setProfList] = useState<any[]>([])
+  const [profAdding, setProfAdding] = useState(false)
+  const [profMsg, setProfMsg] = useState('')
+
   const load = async () => {
     setLoading(true)
     try {
-      const [p, isOn, ip, j, params, st] = await Promise.all([
-        syncGetPeers(), syncIsRunning(), syncGetLocalIp(), syncGetJournal(), getParametres(), rtGetStatus()
+      const [p, isOn, ip, j, params, st, appliedList, profs] = await Promise.all([
+        syncGetPeers(), syncIsRunning(), syncGetLocalIp(), syncGetJournal(), getParametres(), rtGetStatus(),
+        profilListApplied().catch(() => []), profilList().catch(() => [])
       ])
       setPeers(p as Peer[])
       setServerOn(isOn)
@@ -53,10 +61,23 @@ export default function Sync() {
         setRtPort(Number(st.port ?? 7890))
         setRtStatus(st)
       }
+      setApplied(appliedList)
+      setProfList(profs)
     } catch {}
     setLoading(false)
   }
   useEffect(() => { load() }, [])
+
+  const handleAddProfile = async (id: string) => {
+    setProfAdding(true)
+    setProfMsg('')
+    try {
+      await profilAdd(id)
+      setProfMsg('Type de commerce ajouté. La mise à jour sera envoyée aux caisses clientes à la prochaine synchro.')
+      load()
+    } catch (e: any) { setProfMsg(e?.message || 'Erreur') }
+    setProfAdding(false)
+  }
 
   const handleRtSave = async () => {
     setRtSaving(true)
@@ -229,6 +250,50 @@ export default function Sync() {
           <span className="text-xs text-gray-400">Étape : 1ʳᵉ caisse = Serveur, puis les autres = Client avec son IP.</span>
         </div>
         {rtMsg && <p className="text-xs text-indigo-700 mt-2">{rtMsg}</p>}
+
+        {/* Types de commerce du magasin (config serveur → héritée par les clients) */}
+        <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50/60 p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="font-semibold text-sm text-gray-700">Types de commerce du magasin</h3>
+            {rtRole === 'client' && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">hérités du serveur</span>
+            )}
+          </div>
+          <p className="text-xs text-gray-400 mb-3">
+            {rtRole === 'serveur'
+              ? 'Un magasin peut combiner plusieurs types de commerce (ex : vêtements + coiffure). La configuration est envoyée à toutes les caisses clientes.'
+              : 'Votre caisse utilise la configuration du serveur (types de commerce, paramètres, catalogue). Elle est mise à jour automatiquement.'}
+          </p>
+
+          <div className="flex flex-wrap gap-2 mb-3">
+            {applied.map(a => (
+              <span key={a.id} className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700">
+                {a.id} — {a.label}
+              </span>
+            ))}
+            {applied.length === 0 && (
+              <span className="text-xs text-gray-400">Aucun type de commerce actif. Configurez le serveur pour lancer votre magasin.</span>
+            )}
+          </div>
+
+          {rtRole === 'serveur' && profList.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-gray-500">Ajouter un type :</span>
+              <select
+                value=""
+                onChange={e => { if (e.target.value) handleAddProfile(e.target.value) }}
+                className="px-2 py-1.5 rounded-lg border border-gray-200 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              >
+                <option value="">— Choisir —</option>
+                {profList.filter(l => !applied.some(a => a.id === l.id)).map(l => (
+                  <option key={l.id} value={l.id}>{l.icone} {l.label}</option>
+                ))}
+              </select>
+              {profAdding && <Loader size={14} className="animate-spin text-indigo-500" />}
+            </div>
+          )}
+          {profMsg && <p className="text-xs text-emerald-700 mt-2">{profMsg}</p>}
+        </div>
       </div>
 
       {/* Statut serveur */}

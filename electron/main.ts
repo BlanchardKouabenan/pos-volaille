@@ -12,6 +12,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   addMouvement, getMouvements,
   createVente, getVentes, getVenteById, getVenteStats,
   checkRemoteStocks, applyRemoteVenteStock, getRemoteCatalog, getRemoteClients, getCodeBarreById, syncRemoteCatalog,
+  getRemoteConfig, applyRemoteConfig,
   getAllClients, createClient, updateClient, deleteClient, getClientVentes,
   getPrixClients, getPrixClient, setPrixClient, setPrixClientsBulk,
   getAllParametres, setParametre, setParametres,
@@ -52,6 +53,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   getRapportTVA,
   setAuditUser, getAuditLog, logAudit,
   getProfileCommerce, listProfils, applyProfileCommerce,
+  getProfilsAppliques, addProfileType, removeProfileType,
   listAttributs, listAttributsActifs, getAttributsProduit, setAttributsProduit, getAttributionsTousProduits,
   getVariantesProduit, setVariantesProduit,
   nbSessionsOuvertes, getEmailsJournal
@@ -61,7 +63,7 @@ import { printReceipt, generateReceiptText, openCashDrawer, buildPrinterInterfac
 import { generateZpl, printZplFromString } from './zpl'
 import { sendSms, formatSmsTicket } from './sms'
 import { envoyerFondCaisseCloture, envoyerPointVenteHoraire, envoyerControleReleve, envoyerAlerteForfait, envoyerTestEmail, envoyerResumeJournalier, envoyerEtatInventaire, envoyerAlertesStock } from './reports'
-import { isRtClient, rtSendDecrement, refreshRtCatalog, flushRtQueue, isRtOnline } from './rt'
+import { isRtClient, rtSendDecrement, refreshRtCatalog, refreshRtConfig, flushRtQueue, isRtOnline } from './rt'
 import { getForfaitInfo, prolongerForfaitLocal, appliquerLicence, genererLicence } from './license'
 import { notifyDesktop, configureNotifications, notifyStock, notifyVente } from './notifications'
 import { uploadLocalFile, ensureRemoteDir, listRemoteDir } from './webdav'
@@ -404,6 +406,11 @@ function startRtClient() {
       const cat = await refreshRtCatalog()
       if (!cat.offline) syncRemoteCatalog(cat.produits ?? [], cat.variantes ?? [])
     } catch {}
+    // Héritage de la configuration serveur (types de commerce, paramètres…)
+    try {
+      const cfg = await refreshRtConfig()
+      if (!cfg.offline && cfg.config) applyRemoteConfig(cfg.config)
+    } catch {}
     try { await flushRtQueue() } catch {}
   }
   run()
@@ -562,6 +569,9 @@ ipcMain.handle('db:getParametres', () => getAllParametres())
   ipcMain.handle('profile:get', () => getProfileCommerce())
   ipcMain.handle('profile:list', () => listProfils())
   ipcMain.handle('profile:apply', (_e, id: string, opts?: { remplacerCatalogue?: boolean }) => applyProfileCommerce(id, opts))
+  ipcMain.handle('profile:listApplied', () => getProfilsAppliques())
+  ipcMain.handle('profile:add', (_e, id: string) => addProfileType(id))
+  ipcMain.handle('profile:remove', (_e, id: string) => removeProfileType(id))
 
   // Attributs / variantes
   ipcMain.handle('attributs:list', (_e, actifsSeulement?: boolean) => actifsSeulement ? listAttributsActifs() : listAttributs())
@@ -1051,6 +1061,11 @@ function startSyncServer(port: number) {
     } else if (url.pathname === '/api/rt/clients' && req.method === 'GET') {
       res.setHeader('Content-Type', 'application/json; charset=utf-8')
       try { res.writeHead(200); res.end(JSON.stringify({ ok: true, clients: getRemoteClients() })) }
+      catch (e: any) { res.writeHead(500); res.end(JSON.stringify({ ok: false, error: e.message })) }
+
+    } else if (url.pathname === '/api/rt/config' && req.method === 'GET') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      try { res.writeHead(200); res.end(JSON.stringify({ ok: true, config: getRemoteConfig(), server_time: new Date().toISOString() })) }
       catch (e: any) { res.writeHead(500); res.end(JSON.stringify({ ok: false, error: e.message })) }
 
     } else if (url.pathname === '/api/rt/check-stock' && req.method === 'POST') {

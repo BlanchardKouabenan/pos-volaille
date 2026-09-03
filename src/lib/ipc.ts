@@ -69,6 +69,9 @@ const prof = () => api().profile
 export const profilGet = (): Promise<ProfilCommerceAplique | null> => prof().get()
 export const profilList = (): Promise<ProfilListEntry[]> => prof().list()
 export const profilApply = (id: string, opts?: { remplacerCatalogue?: boolean }): Promise<ProfilCommerceAplique> => prof().apply(id, opts)
+export const profilListApplied = (): Promise<ProfilCommerceAplique[]> => prof().listApplied()
+export const profilAdd = (id: string): Promise<ProfilCommerceAplique> => prof().add(id)
+export const profilRemove = (id: string): Promise<boolean> => prof().remove(id)
 
 // ─── Attributs / Variantes ────────────────────────────────────────────────────
 const attr = () => api().attributs

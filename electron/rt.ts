@@ -9,6 +9,7 @@ import { getAllParametres } from './database'
 type LigneStock = { produit_id: number; quantite: number; variante_id?: number; nom_libre?: string }
 
 let localCatalogCache: { produits: any[]; variantes: any[] } | null = null
+let localConfigCache: any = null
 let offlineQueue: { items: LigneStock[]; caissier_id: number; ticket: string; time: string }[] = []
 let online = false
 
@@ -63,6 +64,23 @@ export async function refreshRtCatalog(): Promise<{ ok: boolean; offline: boolea
 
 export function getRtCatalogCache(): { produits: any[]; variantes: any[] } {
   return localCatalogCache ?? { produits: [], variantes: [] }
+}
+
+// Récupère la configuration du serveur (types de commerce, paramètres, attributs…)
+export async function refreshRtConfig(): Promise<{ ok: boolean; offline: boolean; config?: any }> {
+  try {
+    const data = await rtFetch('/api/rt/config')
+    localConfigCache = data.config ?? null
+    online = true
+    return { ok: true, offline: false, config: localConfigCache }
+  } catch {
+    online = false
+    return { ok: localConfigCache !== null, offline: true, config: localConfigCache }
+  }
+}
+
+export function getRtConfigCache(): any {
+  return localConfigCache
 }
 
 // Synchronise la réplication des clients (fidélité / solde) depuis le serveur.
