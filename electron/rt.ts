@@ -11,7 +11,7 @@ type LigneVente = {
   code_barre?: string; nom?: string; categorie_id?: number; variante_id?: number; nom_libre?: string; details?: string
 }
 
-let localCatalogCache: { produits: any[]; variantes: any[] } | null = null
+let localCatalogCache: { produits: any[]; variantes: any[]; categories: any[] } | null = null
 let localConfigCache: any = null
 let offlineQueue: { items: LigneVente[]; caissier_id: number; ticket: string; time: string; venteData: any }[] = []
 let online = false
@@ -53,20 +53,20 @@ async function rtFetch(path: string, init?: RequestInit): Promise<any> {
 }
 
 // Chargement du catalogue depuis le serveur (avec cache local en fallback).
-export async function refreshRtCatalog(): Promise<{ ok: boolean; offline: boolean; produits?: any[]; variantes?: any[] }> {
+export async function refreshRtCatalog(): Promise<{ ok: boolean; offline: boolean; categories?: any[]; produits?: any[]; variantes?: any[] }> {
   try {
     const data = await rtFetch('/api/rt/catalog')
-    localCatalogCache = { produits: data.produits ?? [], variantes: data.variantes ?? [] }
+    localCatalogCache = { produits: data.produits ?? [], variantes: data.variantes ?? [], categories: data.categories ?? [] }
     online = true
-    return { ok: true, offline: false, produits: data.produits, variantes: data.variantes }
+    return { ok: true, offline: false, categories: data.categories, produits: data.produits, variantes: data.variantes }
   } catch {
     online = false
-    return { ok: localCatalogCache !== null, offline: true, produits: localCatalogCache?.produits, variantes: localCatalogCache?.variantes }
+    return { ok: localCatalogCache !== null, offline: true, categories: localCatalogCache?.categories, produits: localCatalogCache?.produits, variantes: localCatalogCache?.variantes }
   }
 }
 
-export function getRtCatalogCache(): { produits: any[]; variantes: any[] } {
-  return localCatalogCache ?? { produits: [], variantes: [] }
+export function getRtCatalogCache(): { produits: any[]; variantes: any[]; categories: any[] } {
+  return localCatalogCache ?? { produits: [], variantes: [], categories: [] }
 }
 
 // Récupère la configuration du serveur (types de commerce, paramètres, attributs…)
@@ -170,4 +170,42 @@ export async function flushRtQueue(): Promise<number> {
 
 export function getRtQueueLength(): number {
   return offlineQueue.length
+}
+
+// ─── HÉRITAGE DE CONFIGURATION (force le pull complet catalogue + config) ──────
+// Bouton "Hériter" côté client : force un rafraîchissement complet du catalogue
+// et de la configuration depuis le serveur.
+export async function rtInherit(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const cat = await rtFetch('/api/rt/catalog')
+    localCatalogCache = { produits: cat.produits ?? [], variantes: cat.variantes ?? [], categories: cat.categories ?? [] }
+    online = true
+    return { ok: true }
+  } catch (e: any) {
+    online = false
+    return { ok: false, error: e?.message || 'Serveur injoignable' }
+  }
+}
+
+// ─── RAPPORT DE CLÔTURE DE CAISSE (client → serveur) ──────────────────────────
+// Envoie les données de clôture de session au serveur pour le tableau de bord.
+export async function rtSendCloture(data: {
+  caisse_id: string; user_nom?: string; date: string; heure?: string;
+  nb_ventes: number; total_ventes: number; total_especes: number; total_mobile: number;
+  fond_caisse: number; montant_final_especes: number; ecart?: number
+}): Promise<{ ok: boolean; error?: string }> {
+  const base = rtBase()
+  if (!base) return { ok: true }
+  try {
+    const resp = await rtFetch('/api/rt/cloture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    online = true
+    return { ok: resp.ok !== false }
+  } catch (e: any) {
+    online = false
+    return { ok: false, error: e?.message || 'Serveur injoignable' }
+  }
 }

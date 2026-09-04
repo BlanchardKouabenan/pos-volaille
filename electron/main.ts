@@ -56,14 +56,15 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   getProfilsAppliques, addProfileType, removeProfileType,
   listAttributs, listAttributsActifs, getAttributsProduit, setAttributsProduit, getAttributionsTousProduits,
   getVariantesProduit, setVariantesProduit,
-  nbSessionsOuvertes, getEmailsJournal
+  nbSessionsOuvertes, getEmailsJournal,
+  getVentesParCaisse, getCloturesPos, createCloturePos
 } from './database'
 import http from 'http'
 import { printReceipt, generateReceiptText, openCashDrawer, buildPrinterInterface } from './printer'
 import { generateZpl, printZplFromString } from './zpl'
 import { sendSms, formatSmsTicket } from './sms'
 import { envoyerFondCaisseCloture, envoyerPointVenteHoraire, envoyerControleReleve, envoyerAlerteForfait, envoyerTestEmail, envoyerResumeJournalier, envoyerEtatInventaire, envoyerAlertesStock } from './reports'
-import { isRtClient, rtSendDecrement, refreshRtCatalog, refreshRtConfig, flushRtQueue, isRtOnline } from './rt'
+import { isRtClient, rtSendDecrement, rtSendCloture, refreshRtCatalog, refreshRtConfig, flushRtQueue, isRtOnline } from './rt'
 import { getForfaitInfo, prolongerForfaitLocal, appliquerLicence, genererLicence } from './license'
 import { notifyDesktop, configureNotifications, notifyStock, notifyVente } from './notifications'
 import { uploadLocalFile, ensureRemoteDir, listRemoteDir } from './webdav'
@@ -404,7 +405,7 @@ function startRtClient() {
   const run = async () => {
     try {
       const cat = await refreshRtCatalog()
-      if (!cat.offline) syncRemoteCatalog(cat.produits ?? [], cat.variantes ?? [])
+      if (!cat.offline) syncRemoteCatalog(cat.produits ?? [], cat.variantes ?? [], (cat as any).categories)
     } catch {}
     // Héritage de la configuration serveur (types de commerce, paramètres…)
     try {
@@ -681,9 +682,57 @@ ipcMain.handle('db:cloturerSession', async (_e, sessionId, montantFinal) => {
       envoyerResumeJournalier().catch(() => {})
     }
   } catch {}
+  // Remontée de la clôture vers le Master (si caisse cliente)
+  if (isRtClient() && (result?.changes ?? 0) > 0) {
+    try {
+      const sessions = getSessionsCaisse()
+      const session = (sessions ?? []).find((s: any) => Number(s.id) === Number(sessionId))
+      if (session) {
+        const totalVentes = Number(session.total_ventes ?? 0)
+        const totalEspeces = Number(session.total_especes ?? session.montant_final_especes ?? 0)
+        await rtSendCloture({
+          caisse_id: getAllParametres()?.caisse_id || '1',
+          user_nom: session.user_nom ?? undefined,
+          date: String(session.date || new Date().toISOString().slice(0, 10)),
+          heure: session.heure_cloture ?? undefined,
+          nb_ventes: Number(session.nb_ventes ?? 0),
+          total_ventes: totalVentes,
+          total_especes: totalEspeces,
+          total_mobile: Math.max(0, totalVentes - totalEspeces),
+          fond_caisse: 0,
+          montant_final_especes: Number(session.montant_final_especes ?? 0),
+          ecart: 0
+        }).catch(() => {})
+      }
+    } catch {}
+  }
   return result
 })
 ipcMain.handle('db:getSessionsCaisse', (_e, dateDebut, dateFin) => getSessionsCaisse(dateDebut, dateFin))
+
+// ─── VENTES PAR CAISSE + CLÔTURES POS ─────────────────────────────────────────
+ipcMain.handle('db:getVentesParCaisse', (_e, dateDebut, dateFin) => getVentesParCaisse(dateDebut, dateFin))
+ipcMain.handle('db:getCloturesPos', (_e, dateDebut, dateFin) => getCloturesPos(dateDebut, dateFin))
+
+// ─── HÉRITAGE CLIENT (force le pull catalogue + config) ───────────────────────
+ipcMain.handle('rt:inherit', async () => {
+  try {
+    const cat = await refreshRtCatalog()
+    let totalAjoutes = 0, totalMajes = 0
+    if (!cat.offline) {
+      const r = syncRemoteCatalog(cat.produits ?? [], cat.variantes ?? [], (cat as any).categories)
+      totalAjoutes += r.ajoutes; totalMajes += r.majes
+    }
+    const cfg = await refreshRtConfig()
+    if (!cfg.offline && cfg.config) applyRemoteConfig(cfg.config)
+    return { ok: !cat.offline, ajoutes: totalAjoutes, majes: totalMajes, profils: (cfg.config?.profils_appliques ?? []).length }
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Serveur injoignable' }
+  }
+})
+
+// ─── CLÔTURE CLIENT → SERVEUR ─────────────────────────────────────────────────
+ipcMain.handle('rt:sendCloture', async (_e, data) => await rtSendCloture(data))
 
 // ─── TIROIR ───────────────────────────────────────────────────────────────────
 ipcMain.handle('tiroir:ouvrir', async (_e, data) => {
@@ -1111,6 +1160,32 @@ function startSyncServer(port: number) {
           }
         ))
         res.writeHead(200); res.end(JSON.stringify({ ok: result.ok, venteId: result.venteId, ticket: result.ticket, insuffisants: result.insuffisants }))
+      } catch (e: any) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: e.message })) }
+
+    } else if (url.pathname === '/api/rt/inherit' && req.method === 'POST') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      try {
+        res.writeHead(200); res.end(JSON.stringify({ ok: true, config: getRemoteConfig(), server_time: new Date().toISOString() }))
+      } catch (e: any) { res.writeHead(500); res.end(JSON.stringify({ ok: false, error: e.message })) }
+
+    } else if (url.pathname === '/api/rt/cloture' && req.method === 'POST') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      try {
+        const parsed = JSON.parse(await readBody(req))
+        const r = createCloturePos({
+          caisse_id: parsed.caisse_id ?? '1',
+          user_nom: parsed.user_nom,
+          date: parsed.date,
+          heure: parsed.heure,
+          nb_ventes: parsed.nb_ventes ?? 0,
+          total_ventes: parsed.total_ventes ?? 0,
+          total_especes: parsed.total_especes ?? 0,
+          total_mobile: parsed.total_mobile ?? 0,
+          fond_caisse: parsed.fond_caisse ?? 0,
+          montant_final_especes: parsed.montant_final_especes ?? 0,
+          ecart: parsed.ecart
+        })
+        res.writeHead(200); res.end(JSON.stringify({ ok: !!r, id: r?.lastInsertRowid }))
       } catch (e: any) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: e.message })) }
 
     } else {

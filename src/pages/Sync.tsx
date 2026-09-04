@@ -4,7 +4,7 @@ import {
   syncPushTo, syncPullFrom,
   syncStartServer, syncStopServer, syncIsRunning, syncGetLocalIp,
   syncGetJournal, syncSetAutoInterval, getParametres,
-  rtSetRole, rtGetStatus,
+  rtSetRole, rtGetStatus, rtInherit,
   profilList, profilListApplied, profilAdd
 } from '@/lib/ipc'
 import { RefreshCw, Plus, Trash2, Upload, Download, Wifi, WifiOff, Globe, X, Check, AlertCircle, Server, Monitor, Network, Loader } from 'lucide-react'
@@ -37,6 +37,8 @@ export default function Sync() {
   const [rtSaving, setRtSaving] = useState(false)
   const [rtMsg, setRtMsg] = useState('')
   const [rtTesting, setRtTesting] = useState(false)
+  const [rtInheriting, setRtInheriting] = useState(false)
+  const [rtInheritMsg, setRtInheritMsg] = useState('')
 
   // Types de commerce du magasin (multi-types, config serveur → clients)
   const [applied, setApplied] = useState<any[]>([])
@@ -98,6 +100,23 @@ export default function Sync() {
     setRtTesting(false)
     load()
     setRtMsg('')
+  }
+
+  const handleRtInherit = async () => {
+    setRtInheriting(true)
+    setRtInheritMsg('')
+    const r = await rtInherit()
+    setRtInheriting(false)
+    if (r?.ok) {
+      const parts = []
+      if (r.profils) parts.push(`${r.profils} type(s) de commerce`)
+      if (r.ajoutes) parts.push(`${r.ajoutes} produit(s) ajouté(s)`)
+      if (r.majes) parts.push(`${r.majes} produit(s) mis à jour`)
+      setRtInheritMsg('Héritage réussi : ' + (parts.join(', ') || 'catalogue à jour avec le serveur') + '.')
+      load()
+    } else {
+      setRtInheritMsg(r?.error || 'Échec de la récupération')
+    }
   }
 
   const handleSaveAuto = async () => {
@@ -261,6 +280,17 @@ export default function Sync() {
           <div className="mb-4 text-xs rounded-lg px-3 py-2 bg-amber-50 text-amber-700 flex items-center gap-2">
             <AlertCircle size={14} />
             Serveur injoignable — mode dégradé : vous pouvez encaisser, le stock sera réconcilié quand le serveur revient.
+          </div>
+        )}
+
+        {rtRole === 'client' && (
+          <div className="mb-4">
+            <button onClick={handleRtInherit} disabled={rtInheriting}
+              className="px-4 py-2 rounded-xl font-semibold text-sm bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1.5">
+              {rtInheriting ? <Loader size={14} className="animate-spin" /> : <Download size={14} />}
+              {rtInheriting ? 'Récupération...' : 'Hériter du serveur'}
+            </button>
+            {rtInheritMsg && <p className="text-xs text-violet-700 mt-2">{rtInheritMsg}</p>}
           </div>
         )}
 

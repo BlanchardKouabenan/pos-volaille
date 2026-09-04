@@ -62,6 +62,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cloturerSession: (sessionId: number, montantFinal: number) => ipcRenderer.invoke('db:cloturerSession', sessionId, montantFinal),
     getSessionsCaisse: (dateDebut?: string, dateFin?: string) => ipcRenderer.invoke('db:getSessionsCaisse', dateDebut, dateFin),
 
+    // Ventes par caisse + clôtures POS
+    getVentesParCaisse: (dateDebut?: string, dateFin?: string) => ipcRenderer.invoke('db:getVentesParCaisse', dateDebut, dateFin),
+    getCloturesPos: (dateDebut?: string, dateFin?: string) => ipcRenderer.invoke('db:getCloturesPos', dateDebut, dateFin),
+
     // Tiroir
     getTiroirLog: (dateDebut?: string, dateFin?: string) => ipcRenderer.invoke('db:getTiroirLog', dateDebut, dateFin),
 
@@ -290,6 +294,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   rt: {
     setRole: (role: string, ip?: string, port?: number, caisseId?: string) => ipcRenderer.invoke('rt:setRole', role, ip, port, caisseId),
     getStatus: () => ipcRenderer.invoke('rt:getStatus'),
+    inherit: () => ipcRenderer.invoke('rt:inherit'),
+    sendCloture: (data: any) => ipcRenderer.invoke('rt:sendCloture', data),
   },
   whatsapp: {
     openTicket: (phone: string, message: string) => ipcRenderer.invoke('whatsapp:openTicket', phone, message),

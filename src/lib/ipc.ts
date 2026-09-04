@@ -110,6 +110,12 @@ export const cloturerSession = (sessionId: number, montantFinal: number): Promis
 export const getSessionsCaisse = (dateDebut?: string, dateFin?: string): Promise<SessionCaisse[]> =>
   api().db.getSessionsCaisse(dateDebut, dateFin)
 
+// ─── Ventes par caisse + clôtures POS ─────────────────────────────────────────
+export const getVentesParCaisse = (dateDebut?: string, dateFin?: string): Promise<{ caisse_id: string; nb_ventes: number; ca_total: number; total_especes: number; total_mobile: number }[]> =>
+  api().db.getVentesParCaisse(dateDebut, dateFin)
+export const getCloturesPos = (dateDebut?: string, dateFin?: string): Promise<any[]> =>
+  api().db.getCloturesPos(dateDebut, dateFin)
+
 // ─── Tiroir ───────────────────────────────────────────────────────────────────
 export const ouvrirTiroir = (data: { type: 'vente' | 'ouverture_simple'; vente_id?: number; user_id: number; session_id?: number; motif?: string }): Promise<any> =>
   api().tiroir.ouvrir(data)
@@ -377,6 +383,12 @@ export const syncSetAutoInterval = (minutes: number): Promise<any> => api().sync
 // ─── Mode client-serveur (stock partagé temps réel) ───────────────────────────
 export const rtSetRole = (role: string, ip?: string, port?: number, caisseId?: string): Promise<any> => api().rt.setRole(role, ip, port, caisseId)
 export const rtGetStatus = (): Promise<any> => api().rt.getStatus()
+export const rtInherit = (): Promise<{ ok: boolean; error?: string; ajoutes?: number; majes?: number; profils?: number }> => api().rt.inherit()
+export const rtSendCloture = (data: {
+  caisse_id: string; user_nom?: string; date: string; heure?: string;
+  nb_ventes: number; total_ventes: number; total_especes: number; total_mobile: number;
+  fond_caisse: number; montant_final_especes: number; ecart?: number
+}): Promise<{ ok: boolean; error?: string }> => api().rt.sendCloture(data)
 export const whatsappOpenTicket = (phone: string, message: string): Promise<any> => api().whatsapp.openTicket(phone, message)
 
 // ─── Sprint 9 — Client 360° & Campagnes ───────────────────────────────────────

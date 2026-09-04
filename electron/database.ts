@@ -870,6 +870,29 @@ function migrateSchema() {
   safeAddCol('retours', 'montant_reliquat', 'REAL DEFAULT 0')
   safeAddCol('retour_lignes', 'type', 'TEXT DEFAULT \'retour\'')
   safeAddCol('retour_lignes', 'variante_id', 'INTEGER')
+  // Mode client-serveur : identifiants partagés cross-noeuds
+  safeAddCol('produits', 'source_id', 'TEXT')
+  safeAddCol('categories', 'source_id', 'TEXT')
+  // Ventes : caisse d'origine
+  safeAddCol('ventes', 'caisse_id', 'TEXT DEFAULT \'1\'')
+  // Table des clotures pos (rapporté au serveur par les caisses clientes)
+  try {
+    db.run(`CREATE TABLE IF NOT EXISTS clotures_pos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      caisse_id TEXT NOT NULL,
+      user_nom TEXT,
+      date TEXT NOT NULL,
+      heure TEXT,
+      nb_ventes INTEGER DEFAULT 0,
+      total_ventes REAL DEFAULT 0,
+      total_especes REAL DEFAULT 0,
+      total_mobile REAL DEFAULT 0,
+      fond_caisse REAL DEFAULT 0,
+      montant_final_especes REAL DEFAULT 0,
+      ecart REAL DEFAULT 0,
+      recu_at TEXT DEFAULT (datetime('now'))
+    )`)
+  } catch {}
   // Seed référentiel unités
   try {
     const unitesDef: [string, string, number][] = [
@@ -1122,7 +1145,8 @@ export function getAllCategories() {
 }
 
 export function createCategorie(data: { nom: string; couleur: string; icone: string }) {
-  const r = runWrite('INSERT INTO categories (nom, couleur, icone) VALUES (?, ?, ?)', [data.nom, data.couleur, data.icone])
+  const sourceId = 'pc-' + crypto.randomUUID()
+  const r = runWrite('INSERT INTO categories (source_id, nom, couleur, icone) VALUES (?, ?, ?, ?)', [sourceId, data.nom, data.couleur, data.icone])
   logAudit({ action: 'creation', entite: 'categorie', details: { nom: data.nom } })
   return r
 }
@@ -1164,9 +1188,10 @@ export function getProduitByBarcode(codeBarre: string) {
 }
 
 export function createProduit(data: any) {
+  const sourceId = 'pc-' + crypto.randomUUID()
   const r = runWrite(
-    'INSERT INTO produits (nom, categorie_id, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, code_barre, date_peremption, lot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [data.nom, data.categorie_id, data.prix_vente, data.prix_achat, data.unite, data.stock_actuel ?? 0, data.stock_minimum ?? 0, data.code_barre ?? null, data.date_peremption ?? null, data.lot ?? null]
+    'INSERT INTO produits (source_id, nom, categorie_id, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, code_barre, date_peremption, lot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [sourceId, data.nom, data.categorie_id, data.prix_vente, data.prix_achat, data.unite, data.stock_actuel ?? 0, data.stock_minimum ?? 0, data.code_barre ?? null, data.date_peremption ?? null, data.lot ?? null]
   )
   logAudit({ action: 'creation', entite: 'produit', details: { nom: data.nom, prix_vente: data.prix_vente } })
   return r
@@ -1266,18 +1291,20 @@ export function createVente(data: {
   portefeuille_utilise?: number
   monnaie_creditee_wallet?: number
   boutique_id?: number
+  caisse_id?: string
   paiements?: { mode: string; montant: number }[]
   lignes: { produit_id: number; quantite: number; prix_unitaire: number; total_ligne: number; details?: string; variante_id?: number; nom_libre?: string }[]
 }) {
-  const ticket = generateTicketNumber()
+  const ticket = generateTicketNumber(data.caisse_id)
+  const caisseId = data.caisse_id || getAllParametres()?.caisse_id || '1'
   db.run(
     `INSERT INTO ventes (numero_ticket, total, remise, montant_paye, monnaie_rendue, mode_paiement,
-      caissier_id, client_id, cagnotte_utilisee, portefeuille_utilise, monnaie_creditee_wallet, boutique_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      caissier_id, client_id, cagnotte_utilisee, portefeuille_utilise, monnaie_creditee_wallet, boutique_id, caisse_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [ticket, data.total, data.remise, data.montant_paye, data.monnaie_rendue, data.mode_paiement,
      data.caissier_id, data.client_id ?? null,
      data.cagnotte_utilisee ?? 0, data.portefeuille_utilise ?? 0, data.monnaie_creditee_wallet ?? 0,
-     data.boutique_id ?? 1]
+     data.boutique_id ?? 1, caisseId]
   )
   const venteId = db.exec('SELECT last_insert_rowid() as r')[0]?.values[0]?.[0] as number
 
@@ -1391,10 +1418,10 @@ export function applyRemoteVente(
 
   db.run(
     `INSERT INTO ventes (numero_ticket, total, remise, montant_paye, monnaie_rendue, mode_paiement,
-      caissier_id, client_id, boutique_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      caissier_id, client_id, boutique_id, caisse_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [ticket, venteData.total, venteData.remise, venteData.montant_paye, venteData.monnaie_rendue,
-     venteData.mode_paiement, caissierFinal, clientFinal, 1]
+     venteData.mode_paiement, caissierFinal, clientFinal, 1, cid]
   )
   const venteId = db.exec('SELECT last_insert_rowid() as r')[0]?.values[0]?.[0] as number
 
@@ -1486,15 +1513,17 @@ export function applyRemoteVente(
 
 // Récupère l'état temps réel (catalogue + stock) exposé aux caisses clientes.
 export function getRemoteCatalog() {
+  const categories = queryAll('SELECT id, source_id, nom, couleur, icone FROM categories ORDER BY id', [])
   const produits = queryAll(`
-    SELECT p.id, p.nom, p.categorie_id, c.nom as categorie_nom, p.prix_vente, p.prix_achat,
+    SELECT p.id, p.source_id, p.nom, p.categorie_id, c.source_id as categorie_source_id,
+           c.nom as categorie_nom, p.prix_vente, p.prix_achat,
            p.unite, p.stock_actuel, p.stock_minimum, p.code_barre, p.lot, p.date_peremption
     FROM produits p LEFT JOIN categories c ON p.categorie_id = c.id
     WHERE p.actif = 1 ORDER BY p.nom
   `, [])
   const variantes = queryAll(`SELECT v.id, v.produit_id, p.code_barre, p.nom as produit_nom, v.combinaison, v.stock, v.prix_vente, v.prix_achat, v.sku
     FROM variantes_produit v LEFT JOIN produits p ON p.id = v.produit_id`, [])
-  return { produits, variantes }
+  return { categories, produits, variantes }
 }
 
 export function getRemoteClients() {
@@ -1517,35 +1546,70 @@ export function getClientNom(id: number): string | null {
 }
 
 // Côté caisse cliente : réplique le catalogue du serveur dans la base locale
-// (miroir par code-barres) pour afficher le même stock/catalogue que le serveur.
-export function syncRemoteCatalog(produits: any[], variantes: any[]) {
+// (miroir par source_id) pour afficher le même stock/catalogue que le serveur.
+export function syncRemoteCatalog(produits: any[], variantes: any[], remoteCategories?: any[]) {
   let ajoutes = 0, majes = 0
-  for (const p of produits ?? []) {
-    let local = null
-    if (p.code_barre) {
-      local = queryOne('SELECT id, updated_at FROM produits WHERE code_barre = ?', [p.code_barre])
+
+  // 1) Répliquer les catégories (source_id = identifiant partagé cross-noeud)
+  const catMap: Record<string, number> = {} // source_id → local id
+  if (remoteCategories?.length) {
+    for (const rc of remoteCategories) {
+      const sid = rc.source_id || null
+      let existing: any = null
+      if (sid) existing = queryOne('SELECT id FROM categories WHERE source_id = ?', [sid])
+      if (!existing) existing = queryOne('SELECT id FROM categories WHERE nom = ?', [rc.nom])
+      if (existing) {
+        if (sid) db.run('UPDATE categories SET source_id = ?, couleur = ?, icone = ? WHERE id = ?', [sid, rc.couleur, rc.icone, existing.id])
+        catMap[sid || rc.nom] = existing.id
+      } else {
+        db.run('INSERT INTO categories (source_id, nom, couleur, icone) VALUES (?, ?, ?, ?)', [sid, rc.nom, rc.couleur, rc.icone])
+        const newId = db.exec('SELECT last_insert_rowid() as r')[0]?.values[0]?.[0] as number
+        if (sid) catMap[sid] = newId
+      }
     }
+  }
+
+  // 2) Répliquer les produits (matching par source_id d'abord, puis code_barre, puis nom)
+  for (const p of produits ?? []) {
+    let local: any = null
+    // Priorité 1 : source_id
+    if (p.source_id) {
+      local = queryOne('SELECT id, updated_at FROM produits WHERE source_id = ?', [p.source_id])
+    }
+    // Priorité 2 : code_barre
+    if (!local && p.code_barre) {
+      local = queryOne('SELECT id, updated_at FROM produits WHERE code_barre = ?', [p.code_barre])
+      // Rétro-migrer le source_id si trouvé par code_barre
+      if (local && p.source_id) db.run('UPDATE produits SET source_id = ? WHERE id = ?', [p.source_id, local.id])
+    }
+    // Priorité 3 : nom + catégorie résolue
     if (!local && p.nom) {
-      if (p.categorie_id) {
-        local = queryOne('SELECT id, updated_at FROM produits WHERE nom = ? AND categorie_id = ?', [p.nom, p.categorie_id])
+      const catLocalId = (p.categorie_source_id && catMap[p.categorie_source_id]) || null
+      if (catLocalId) {
+        local = queryOne('SELECT id, updated_at FROM produits WHERE nom = ? AND categorie_id = ?', [p.nom, catLocalId])
       }
       if (!local) {
         local = queryOne('SELECT id, updated_at FROM produits WHERE nom = ? LIMIT 1', [p.nom])
       }
     }
+
+    const catLocalId = ((p.categorie_source_id && catMap[p.categorie_source_id]) || p.categorie_id) ?? null
+
     if (local) {
-      db.run(`UPDATE produits SET nom=?, prix_achat=?, stock_actuel=?, stock_minimum=?, categorie_id=?, unite=?, lot=?, date_peremption=? WHERE id=?`,
-        [p.nom, p.prix_achat ?? 0, p.stock_actuel ?? 0, p.stock_minimum ?? 0, p.categorie_id ?? null, p.unite ?? 'kg', p.lot ?? null, p.date_peremption ?? null, local.id])
+      db.run(`UPDATE produits SET source_id=?, nom=?, prix_achat=?, prix_vente=?, stock_actuel=?, stock_minimum=?, categorie_id=?, unite=?, lot=?, date_peremption=? WHERE id=?`,
+        [p.source_id ?? null, p.nom, p.prix_achat ?? 0, p.prix_vente ?? 0, p.stock_actuel ?? 0, p.stock_minimum ?? 0, catLocalId, p.unite ?? 'kg', p.lot ?? null, p.date_peremption ?? null, local.id])
       majes++
-    } else if (p.code_barre) {
-      db.run(`INSERT OR IGNORE INTO produits (code_barre, nom, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, categorie_id, lot, date_peremption)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [p.code_barre, p.nom, p.prix_vente ?? 0, p.prix_achat ?? 0, p.unite ?? 'kg', p.stock_actuel ?? 0, p.stock_minimum ?? 0, p.categorie_id ?? null, p.lot ?? null, p.date_peremption ?? null])
+    } else if (p.code_barre || p.source_id) {
+      db.run(`INSERT OR IGNORE INTO produits (source_id, code_barre, nom, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, categorie_id, lot, date_peremption)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [p.source_id ?? null, p.code_barre, p.nom, p.prix_vente ?? 0, p.prix_achat ?? 0, p.unite ?? 'kg', p.stock_actuel ?? 0, p.stock_minimum ?? 0, catLocalId, p.lot ?? null, p.date_peremption ?? null])
       ajoutes++
     }
   }
+
+  // 3) Répliquer les variantes
   for (const v of variantes ?? []) {
-    let prod = null
+    let prod: any = null
     if (v.code_barre) {
       prod = queryOne('SELECT id FROM produits WHERE code_barre = ?', [v.code_barre])
     }
@@ -1574,7 +1638,7 @@ export function getRemoteConfig() {
   const profils = getProfilsAppliques()
   const attributs = listAttributsActifs()
   const unites = queryAll('SELECT nom, symbole, pesable FROM unites ORDER BY id')
-  const categories = queryAll('SELECT id, nom, couleur, icone FROM categories ORDER BY id')
+  const categories = queryAll('SELECT id, source_id, nom, couleur, icone FROM categories ORDER BY id')
   const methodesPaiement = queryAll('SELECT code, nom, actif FROM methodes_paiement ORDER BY id')
   return {
     profils_appliques: profils,
@@ -1605,11 +1669,14 @@ export function applyRemoteConfig(config: ReturnType<typeof getRemoteConfig>) {
   for (const [cle, valeur] of Object.entries(config.parametres)) {
     if (valeur !== undefined && valeur !== null && valeur !== '') setParametre(cle, String(valeur))
   }
-  // Profils appliqués
+  // Profils appliqués : appliquer chaque type de commerce du serveur en mode non-destructif
   if (config.profils_appliques?.length) {
+    for (const prof of config.profils_appliques) {
+      try { applyProfileCommerce(prof.id, { remplacerCatalogue: false }) } catch {}
+    }
     setParametre('profils_appliques', JSON.stringify(config.profils_appliques))
   }
-  // Catégories (créer celles qui manquent)
+  // Catégories (créer celles qui manquent, mapper par source_id)
   for (const cat of config.categories ?? []) {
     const existing = queryOne('SELECT id FROM categories WHERE nom = ?', [cat.nom])
     if (!existing) db.run('INSERT OR IGNORE INTO categories (nom, couleur, icone) VALUES (?, ?, ?)', [cat.nom, cat.couleur, cat.icone])
@@ -1720,6 +1787,50 @@ export function getVenteStats(dateDebut: string, dateFin: string) {
   )
 
   return { totalVentes, parModePaiement, topProduits, parJour, marge }
+}
+
+// ─── VENTES PAR CAISSE (statistiques par point de vente) ──────────────────────
+export function getVentesParCaisse(dateDebut?: string, dateFin?: string) {
+  const where = ["v.statut = 'completed'"]
+  const params: any[] = []
+  if (dateDebut) { where.push('date(v.date) >= ?'); params.push(dateDebut) }
+  if (dateFin) { where.push('date(v.date) <= ?'); params.push(dateFin) }
+  const clause = where.join(' AND ')
+  return queryAll(`
+    SELECT v.caisse_id,
+           COUNT(*) as nb_ventes,
+           COALESCE(SUM(v.total), 0) as ca_total,
+           COALESCE(SUM(CASE WHEN v.mode_paiement = 'especes' THEN v.total ELSE 0 END), 0) as total_especes,
+           COALESCE(SUM(CASE WHEN v.mode_paiement != 'especes' THEN v.total ELSE 0 END), 0) as total_mobile
+    FROM ventes v
+    WHERE ${clause}
+    GROUP BY v.caisse_id
+    ORDER BY v.caisse_id
+  `, params)
+}
+
+// ─── CLÔTURES POS (rapportées par les caisses au serveur) ─────────────────────
+export function getCloturesPos(dateDebut?: string, dateFin?: string) {
+  const where: string[] = []
+  const params: any[] = []
+  if (dateDebut) { where.push('date >= ?'); params.push(dateDebut) }
+  if (dateFin) { where.push('date <= ?'); params.push(dateFin) }
+  const clause = where.length ? 'WHERE ' + where.join(' AND ') : ''
+  return queryAll(`SELECT * FROM clotures_pos ${clause} ORDER BY date DESC, heure DESC`, params)
+}
+
+export function createCloturePos(data: {
+  caisse_id: string; user_nom?: string; date: string; heure?: string;
+  nb_ventes: number; total_ventes: number; total_especes: number; total_mobile: number;
+  fond_caisse: number; montant_final_especes: number; ecart?: number
+}) {
+  return runWrite(
+    `INSERT INTO clotures_pos (caisse_id, user_nom, date, heure, nb_ventes, total_ventes, total_especes, total_mobile, fond_caisse, montant_final_especes, ecart)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [data.caisse_id, data.user_nom ?? null, data.date, data.heure ?? null,
+     data.nb_ventes, data.total_ventes, data.total_especes, data.total_mobile,
+     data.fond_caisse, data.montant_final_especes, data.ecart ?? 0]
+  )
 }
 
 // Ventes de la dernière heure (pour l'envoi horaire "point de vente")
