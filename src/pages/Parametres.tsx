@@ -247,7 +247,11 @@ const [licenceToken, setLicenceToken] = useState('')
 
   const handleRemoveProfil = async (id: string) => {
     const label = profils.find(p => p.id === id)?.label ?? id
-    if (!window.confirm(`Retirer « ${label} » du magasin ?\n\nLes catégories et produits associés resteront dans la base.`)) return
+    const isPrincipal = appliedProfiles.findIndex(a => a.id === id) === 0
+    const principalNote = isPrincipal
+      ? `\n\nCe type est le PRINCIPAL. S'il en reste d'autres, le type suivant deviendra le nouveau principal (et déterminera devise et TVA).`
+      : ''
+    if (!window.confirm(`Retirer « ${label} » du magasin ?\n\nSes catégories et produits seront supprimés du stock (les catégories partagées avec un autre type sont conservées).${principalNote}`)) return
     setRemoveProfilLoading(id)
     setProfilMsg('')
     try {
@@ -671,6 +675,23 @@ const [licenceToken, setLicenceToken] = useState('')
                               </div>
                             )}
                           </div>
+                          {isPrincipal ? (
+                            <BadgeCheck className="text-indigo-400 shrink-0" size={20} />
+                          ) : null}
+                          {isPrincipal && appliedProfiles.length > 1 && (
+                            <button
+                              onClick={() => handleRemoveProfil(ap.id)}
+                              disabled={removeProfilLoading === ap.id}
+                              className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                              title={`Retirer ${ap.label} (devient le principal s'il reste des types)`}
+                            >
+                              {removeProfilLoading === ap.id ? (
+                                <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <Trash2 size={16} />
+                              )}
+                            </button>
+                          )}
                           {!isPrincipal && (
                             <button
                               onClick={() => handleRemoveProfil(ap.id)}
@@ -685,7 +706,6 @@ const [licenceToken, setLicenceToken] = useState('')
                               )}
                             </button>
                           )}
-                          {isPrincipal && <BadgeCheck className="text-indigo-400 shrink-0" size={20} />}
                         </div>
                       )
                     })}
