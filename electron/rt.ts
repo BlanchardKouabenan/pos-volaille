@@ -6,11 +6,14 @@
 
 import { getAllParametres } from './database'
 
-type LigneStock = { produit_id: number; quantite: number; variante_id?: number; nom_libre?: string }
+type LigneVente = {
+  produit_id: number; quantite: number; prix_unitaire: number; total_ligne: number;
+  code_barre?: string; nom?: string; categorie_id?: number; variante_id?: number; nom_libre?: string; details?: string
+}
 
 let localCatalogCache: { produits: any[]; variantes: any[] } | null = null
 let localConfigCache: any = null
-let offlineQueue: { items: LigneStock[]; caissier_id: number; ticket: string; time: string }[] = []
+let offlineQueue: { items: LigneVente[]; caissier_id: number; ticket: string; time: string; venteData: any }[] = []
 let online = false
 
 function rtBase(): string | null {
@@ -113,20 +116,24 @@ export async function rtCheckStock(items: { produit_id: number; variante_id?: nu
 
 // Remontée "encaisser d'abord, décrémenter après" : tente l'envoi immédiat,
 // sinon met en file d'attente pour réessai.
-export async function rtSendDecrement(items: LigneStock[], caissierId: number, ticket: string): Promise<{ ok: boolean; queued: boolean }> {
+export async function rtSendDecrement(
+  items: LigneVente[], caissierId: number, ticket: string,
+  venteData: { total: number; remise: number; montant_paye: number; monnaie_rendue: number; mode_paiement: string; client_id?: number; client_nom?: string; paiements?: { mode: string; montant: number }[] }
+): Promise<{ ok: boolean; queued: boolean }> {
   const base = rtBase()
-  if (!base) return { ok: true, queued: false } // pas en mode client
+  if (!base) return { ok: true, queued: false }
+  const caisseId = getAllParametres()?.caisse_id || '1'
   try {
     const data = await rtFetch('/api/rt/decrement', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, caissier_id: caissierId, ticket })
+      body: JSON.stringify({ items, caissier_id: caissierId, ticket, caisse_id: caisseId, vente_data: venteData })
     })
     online = true
     return { ok: data.ok !== false, queued: false }
   } catch {
     online = false
-    offlineQueue.push({ items, caissier_id: caissierId, ticket, time: new Date().toISOString() })
+    offlineQueue.push({ items, caissier_id: caissierId, ticket, time: new Date().toISOString(), venteData })
     return { ok: true, queued: true }
   }
 }
@@ -135,12 +142,13 @@ export async function rtSendDecrement(items: LigneStock[], caissierId: number, t
 export async function flushRtQueue(): Promise<number> {
   if (offlineQueue.length === 0) return 0
   try {
-    await rtFetch('/api/rt/catalog') // ping connexion
+    await rtFetch('/api/rt/catalog')
     online = true
   } catch {
     online = false
     return 0
   }
+  const caisseId = getAllParametres()?.caisse_id || '1'
   let sent = 0
   const remaining: typeof offlineQueue = []
   for (const entry of offlineQueue) {
@@ -148,7 +156,7 @@ export async function flushRtQueue(): Promise<number> {
       const data = await rtFetch('/api/rt/decrement', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: entry.items, caissier_id: entry.caissier_id, ticket: entry.ticket })
+        body: JSON.stringify({ items: entry.items, caissier_id: entry.caissier_id, ticket: entry.ticket, caisse_id: caisseId, vente_data: entry.venteData })
       })
       if (data.ok !== false) sent++
       else remaining.push(entry)

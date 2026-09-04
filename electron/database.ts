@@ -1051,6 +1051,7 @@ function seedData() {
     ['reseau_role', 'none'],
     ['reseau_serveur_ip', ''],
     ['reseau_serveur_port', '7890'],
+    ['caisse_id', '1'],
   ]
   for (const [cle, valeur] of defaults) {
     db.run('INSERT OR IGNORE INTO parametres (cle, valeur) VALUES (?, ?)', [cle, valeur])
@@ -1239,11 +1240,18 @@ export function getMouvements(produitId?: number, limit = 100) {
 
 // ─── VENTES ───────────────────────────────────────────────────────────────────
 
-function generateTicketNumber(): string {
+function generateTicketNumber(caisseId?: string): string {
   const now = new Date()
   const datePart = now.toISOString().slice(0, 10).replace(/-/g, '')
-  const count = queryOne('SELECT COUNT(*) as c FROM ventes', [])?.c ?? 0
-  return `TK-${datePart}-${String(Number(count) + 1).padStart(4, '0')}`
+  const cid = caisseId || getAllParametres()?.caisse_id || '1'
+  const prefix = `TK-${cid}-${datePart}-`
+  const last = queryOne('SELECT numero_ticket FROM ventes WHERE numero_ticket LIKE ? ORDER BY numero_ticket DESC LIMIT 1', [prefix + '%'])
+  let seq = 1
+  if (last) {
+    const parts = last.numero_ticket.split('-')
+    seq = (parseInt(parts[parts.length - 1], 10) || 0) + 1
+  }
+  return `${prefix}${String(seq).padStart(4, '0')}`
 }
 
 export function createVente(data: {
@@ -1350,21 +1358,88 @@ export function checkRemoteStocks(items: { produit_id?: number; variante_id?: nu
   return out
 }
 
-export function applyRemoteVenteStock(items: { produit_id?: number; quantite: number; variante_id?: number; code_barre?: string; nom_libre?: string }[], caissierId: number, ticketLabel: string) {
+export function applyRemoteVente(
+  items: { produit_id?: number; quantite: number; prix_unitaire?: number; total_ligne?: number; variante_id?: number; code_barre?: string; nom?: string; categorie_id?: number; nom_libre?: string; details?: string }[],
+  caissierId: number,
+  ticketLabel: string,
+  venteData: { total: number; remise: number; montant_paye: number; monnaie_rendue: number; mode_paiement: string; caisse_id?: string; client_id?: number; client_nom?: string; paiements?: { mode: string; montant: number }[] }
+) {
+  const cid = venteData.caisse_id || getAllParametres()?.caisse_id || '1'
+  const ticket = generateTicketNumber(cid)
+
+  const existing = queryOne('SELECT id FROM ventes WHERE numero_ticket = ?', [ticket])
+  if (existing) return { ok: true, venteId: existing.id, ticket, dedup: true }
+
+  // Le caissier provient d'une caisse distante : son id n'existe pas forcément
+  // dans la base serveur (clé étrangère activée). On le remplace par NULL si absent.
+  let caissierFinal: number | null = null
+  if (caissierId) {
+    const u = queryOne('SELECT id FROM users WHERE id = ?', [caissierId])
+    caissierFinal = u?.id ?? null
+  }
+
+  // Le client provient d'une caisse distante : résout par nom côté serveur sinon NULL.
+  let clientFinal: number | null = null
+  if (venteData.client_id) {
+    const c = queryOne('SELECT id FROM clients WHERE id = ?', [venteData.client_id])
+    if (c) clientFinal = c.id
+  }
+  if (!clientFinal && venteData.client_nom) {
+    const c = queryOne('SELECT id FROM clients WHERE nom = ? LIMIT 1', [venteData.client_nom])
+    clientFinal = c?.id ?? null
+  }
+
+  db.run(
+    `INSERT INTO ventes (numero_ticket, total, remise, montant_paye, monnaie_rendue, mode_paiement,
+      caissier_id, client_id, boutique_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [ticket, venteData.total, venteData.remise, venteData.montant_paye, venteData.monnaie_rendue,
+     venteData.mode_paiement, caissierFinal, clientFinal, 1]
+  )
+  const venteId = db.exec('SELECT last_insert_rowid() as r')[0]?.values[0]?.[0] as number
+
+  if (venteData.paiements && venteData.paiements.length > 0) {
+    for (const p of venteData.paiements) {
+      if (p.montant <= 0) continue
+      db.run('INSERT INTO vente_paiements (vente_id, mode, montant) VALUES (?, ?, ?)', [venteId, p.mode, p.montant])
+    }
+  } else if (venteData.montant_paye > 0) {
+    db.run('INSERT INTO vente_paiements (vente_id, mode, montant) VALUES (?, ?, ?)', [venteId, venteData.mode_paiement, venteData.montant_paye])
+  }
+
   const produitsVariants = new Set<number>()
   let ok = true
-  const insuffisants: { produit_id?: number | null; code_barre?: string; nom_libre?: string }[] = []
+  const insuffisants: { produit_id?: number | null; code_barre?: string; nom?: string }[] = []
+
   for (const it of items) {
-    // Vente libre : aucun stock à décrémenter
-    if (it.nom_libre || it.produit_id === 99999998) continue
-    // Résolution de l'id serveur par code-barres (référence partagée client/serveur)
-    let pid: number | null = it.produit_id ?? null
-    if (!pid && it.code_barre) {
+    if (it.nom_libre || it.produit_id === 99999998) {
+      db.run(
+        'INSERT INTO vente_lignes (vente_id, produit_id, quantite, prix_unitaire, total_ligne, details, nom_libre) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [venteId, it.produit_id ?? 99999998, it.quantite, it.prix_unitaire ?? 0, it.total_ligne ?? 0, it.details ?? null, it.nom_libre ?? null]
+      )
+      continue
+    }
+
+    // Résolution du produit côté serveur : l'id envoyé par le client n'est pas
+    // fiable (bases distinctes), on privilégie code_barre puis nom.
+    let pid: number | null = null
+    if (it.code_barre) {
       const p = queryOne('SELECT id FROM produits WHERE code_barre = ?', [it.code_barre])
       pid = p?.id ?? null
     }
+    if (!pid && it.nom) {
+      if (it.categorie_id) {
+        const p = queryOne('SELECT id FROM produits WHERE nom = ? AND categorie_id = ?', [it.nom, it.categorie_id])
+        pid = p?.id ?? null
+      }
+      if (!pid) {
+        const p = queryOne('SELECT id FROM produits WHERE nom = ? LIMIT 1', [it.nom])
+        pid = p?.id ?? null
+      }
+    }
     if (!pid) continue
     const id = pid as number
+
     if (it.variante_id) {
       const v = queryOne('SELECT stock FROM variantes_produit WHERE id = ?', [it.variante_id])
       if (Number(v?.stock ?? 0) < Number(it.quantite)) { ok = false; insuffisants.push({ produit_id: id }); continue }
@@ -1372,15 +1447,41 @@ export function applyRemoteVenteStock(items: { produit_id?: number; quantite: nu
       produitsVariants.add(id)
     } else {
       const p = queryOne('SELECT stock_actuel FROM produits WHERE id = ?', [id])
-      if (Number(p?.stock_actuel ?? 0) < Number(it.quantite)) { ok = false; insuffisants.push({ produit_id: id, nom_libre: it.nom_libre }); continue }
+      if (Number(p?.stock_actuel ?? 0) < Number(it.quantite)) { ok = false; insuffisants.push({ produit_id: id }); continue }
       db.run('UPDATE produits SET stock_actuel = MAX(0, stock_actuel - ?) WHERE id = ?', [it.quantite, id])
     }
+
+    const prixUnit = it.prix_unitaire ?? 0
+    const totalLigne = it.total_ligne ?? prixUnit * it.quantite
+    db.run(
+      'INSERT INTO vente_lignes (vente_id, produit_id, quantite, prix_unitaire, total_ligne, details, nom_libre) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [venteId, id, it.quantite, prixUnit, totalLigne, it.details ?? null, null]
+    )
     db.run('INSERT INTO mouvements_stock (produit_id, type, quantite, raison, user_id) VALUES (?, ?, ?, ?, ?)',
-      [id, 'sortie', it.quantite, `Vente ${ticketLabel}`, caissierId])
+      [id, 'sortie', it.quantite, `Vente ${ticket}`, caissierFinal])
   }
+
   for (const pid2 of produitsVariants) resyncStockProduit(pid2)
+
+  const session = queryOne(
+    `SELECT id FROM sessions_caisse WHERE user_id = ? AND date = date('now') AND statut = 'ouvert'`,
+    [caissierFinal]
+  )
+  if (session) {
+    db.run(
+      `UPDATE sessions_caisse SET total_ventes = total_ventes + ?, nb_ventes = nb_ventes + 1 WHERE id = ?`,
+      [venteData.total, session.id]
+    )
+  }
+
+  logSync('vente', venteId, 'create', {
+    numero_ticket: ticket, date: new Date().toISOString(), total: venteData.total,
+    remise: venteData.remise, montant_paye: venteData.montant_paye, monnaie_rendue: venteData.monnaie_rendue,
+    mode_paiement: venteData.mode_paiement, statut: 'completed', boutique_id: 1, caisse_id: cid
+  }, 1)
+
   saveDb()
-  return { ok, insuffisants }
+  return { ok, venteId, ticket, insuffisants }
 }
 
 // Récupère l'état temps réel (catalogue + stock) exposé aux caisses clientes.
@@ -1391,7 +1492,7 @@ export function getRemoteCatalog() {
     FROM produits p LEFT JOIN categories c ON p.categorie_id = c.id
     WHERE p.actif = 1 ORDER BY p.nom
   `, [])
-  const variantes = queryAll(`SELECT v.id, v.produit_id, p.code_barre, v.combinaison, v.stock, v.prix_vente, v.prix_achat, v.sku
+  const variantes = queryAll(`SELECT v.id, v.produit_id, p.code_barre, p.nom as produit_nom, v.combinaison, v.stock, v.prix_vente, v.prix_achat, v.sku
     FROM variantes_produit v LEFT JOIN produits p ON p.id = v.produit_id`, [])
   return { produits, variantes }
 }
@@ -1405,27 +1506,52 @@ export function getCodeBarreById(id: number): string | null {
   return p?.code_barre ?? null
 }
 
+export function getProduitInfo(id: number): { nom: string; categorie_id: number | null; code_barre: string | null } | null {
+  const p = queryOne('SELECT nom, categorie_id, code_barre FROM produits WHERE id = ?', [id])
+  return p ? { nom: p.nom, categorie_id: p.categorie_id, code_barre: p.code_barre } : null
+}
+
+export function getClientNom(id: number): string | null {
+  const c = queryOne('SELECT nom FROM clients WHERE id = ?', [id])
+  return c?.nom ?? null
+}
+
 // Côté caisse cliente : réplique le catalogue du serveur dans la base locale
 // (miroir par code-barres) pour afficher le même stock/catalogue que le serveur.
 export function syncRemoteCatalog(produits: any[], variantes: any[]) {
   let ajoutes = 0, majes = 0
   for (const p of produits ?? []) {
-    if (!p.code_barre) continue
-    const local = queryOne('SELECT id, updated_at FROM produits WHERE code_barre = ?', [p.code_barre])
+    let local = null
+    if (p.code_barre) {
+      local = queryOne('SELECT id, updated_at FROM produits WHERE code_barre = ?', [p.code_barre])
+    }
+    if (!local && p.nom) {
+      if (p.categorie_id) {
+        local = queryOne('SELECT id, updated_at FROM produits WHERE nom = ? AND categorie_id = ?', [p.nom, p.categorie_id])
+      }
+      if (!local) {
+        local = queryOne('SELECT id, updated_at FROM produits WHERE nom = ? LIMIT 1', [p.nom])
+      }
+    }
     if (local) {
       db.run(`UPDATE produits SET nom=?, prix_achat=?, stock_actuel=?, stock_minimum=?, categorie_id=?, unite=?, lot=?, date_peremption=? WHERE id=?`,
         [p.nom, p.prix_achat ?? 0, p.stock_actuel ?? 0, p.stock_minimum ?? 0, p.categorie_id ?? null, p.unite ?? 'kg', p.lot ?? null, p.date_peremption ?? null, local.id])
       majes++
-    } else {
+    } else if (p.code_barre) {
       db.run(`INSERT OR IGNORE INTO produits (code_barre, nom, prix_vente, prix_achat, unite, stock_actuel, stock_minimum, categorie_id, lot, date_peremption)
         VALUES (?,?,?,?,?,?,?,?,?,?)`,
         [p.code_barre, p.nom, p.prix_vente ?? 0, p.prix_achat ?? 0, p.unite ?? 'kg', p.stock_actuel ?? 0, p.stock_minimum ?? 0, p.categorie_id ?? null, p.lot ?? null, p.date_peremption ?? null])
       ajoutes++
     }
   }
-  // Miroir simplifié des variantes (par combinaison JSON) pour rester cohérent
   for (const v of variantes ?? []) {
-    const prod = queryOne('SELECT id FROM produits WHERE code_barre = ?', [v.code_barre])
+    let prod = null
+    if (v.code_barre) {
+      prod = queryOne('SELECT id FROM produits WHERE code_barre = ?', [v.code_barre])
+    }
+    if (!prod && v.produit_nom) {
+      prod = queryOne('SELECT id FROM produits WHERE nom = ? LIMIT 1', [v.produit_nom])
+    }
     if (!prod) continue
     const existing = queryOne('SELECT id FROM variantes_produit WHERE produit_id = ? AND combinaison = ?', [prod.id, v.combinaison])
     if (existing) {

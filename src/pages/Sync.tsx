@@ -32,6 +32,7 @@ export default function Sync() {
   const [rtRole, setRtRole] = useState('none')
   const [rtIp, setRtIp] = useState('')
   const [rtPort, setRtPort] = useState(7890)
+  const [rtCaisseId, setRtCaisseId] = useState('1')
   const [rtStatus, setRtStatus] = useState<any>(null)
   const [rtSaving, setRtSaving] = useState(false)
   const [rtMsg, setRtMsg] = useState('')
@@ -59,6 +60,7 @@ export default function Sync() {
         setRtRole(st.role ?? 'none')
         setRtIp(st.ip ?? '')
         setRtPort(Number(st.port ?? 7890))
+        setRtCaisseId(st.caisse_id ?? '1')
         setRtStatus(st)
       }
       setApplied(appliedList)
@@ -82,7 +84,7 @@ export default function Sync() {
   const handleRtSave = async () => {
     setRtSaving(true)
     setRtMsg('')
-    const r = await rtSetRole(rtRole, rtRole === 'client' ? rtIp : undefined, rtPort)
+    const r = await rtSetRole(rtRole, rtRole === 'client' ? rtIp : undefined, rtPort, rtCaisseId || '1')
     setRtSaving(false)
     if (r?.ok) { setRtMsg('Configuration réseau enregistrée'); load() }
     else setRtMsg(r?.error || 'Erreur d\'enregistrement')
@@ -219,6 +221,30 @@ export default function Sync() {
                 <input type="number" value={rtPort} onChange={e => setRtPort(Number(e.target.value))}
                   className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-300" />
               </div>
+            </div>
+          </div>
+        )}
+
+        {(rtRole === 'serveur' || rtRole === 'client') && (
+          <div className="bg-indigo-50/60 rounded-xl p-4 mb-4 border border-indigo-100">
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Numéro de caisse (ID)</label>
+                <input value={rtCaisseId} onChange={e => setRtCaisseId(e.target.value)} placeholder="ex : 1"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                <p className="text-xs text-gray-400 mt-1">
+                  {rtRole === 'serveur'
+                    ? 'Le serveur utilise ce numéro dans les tickets (ex : TK-1-…). Par défaut : 1.'
+                    : 'Identifiant unique de cette caisse. Les tickets porteront ce numéro (ex : TK-2-…). Chaque caisse doit avoir un numéro distinct.'}
+                </p>
+              </div>
+              {rtRole === 'serveur' && (
+                <div className="flex items-end">
+                  <div className="text-xs text-gray-500 bg-white rounded-lg px-3 py-2 border border-gray-200 w-full">
+                    <span className="font-semibold">Tickets :</span> TK-<span className="font-mono text-indigo-600">{rtCaisseId || '1'}</span>-YYYYMMDD-NNNN
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

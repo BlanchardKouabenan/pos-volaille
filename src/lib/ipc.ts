@@ -375,7 +375,7 @@ export const syncPullFrom = (peerId: number, ip: string, port: number): Promise<
 export const syncSetAutoInterval = (minutes: number): Promise<any> => api().sync.setAutoInterval(minutes)
 
 // ─── Mode client-serveur (stock partagé temps réel) ───────────────────────────
-export const rtSetRole = (role: string, ip?: string, port?: number): Promise<any> => api().rt.setRole(role, ip, port)
+export const rtSetRole = (role: string, ip?: string, port?: number, caisseId?: string): Promise<any> => api().rt.setRole(role, ip, port, caisseId)
 export const rtGetStatus = (): Promise<any> => api().rt.getStatus()
 export const whatsappOpenTicket = (phone: string, message: string): Promise<any> => api().whatsapp.openTicket(phone, message)
 

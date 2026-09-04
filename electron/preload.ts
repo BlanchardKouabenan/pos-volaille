@@ -288,7 +288,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setAutoInterval: (minutes: number) => ipcRenderer.invoke('sync:setAutoInterval', minutes),
   },
   rt: {
-    setRole: (role: string, ip?: string, port?: number) => ipcRenderer.invoke('rt:setRole', role, ip, port),
+    setRole: (role: string, ip?: string, port?: number, caisseId?: string) => ipcRenderer.invoke('rt:setRole', role, ip, port, caisseId),
     getStatus: () => ipcRenderer.invoke('rt:getStatus'),
   },
   whatsapp: {

@@ -11,7 +11,7 @@ import { initDatabase, loginUser, getAllUsers, createUser, updateUser, deleteUse
   getAllProduits, getProduitByBarcode, createProduit, updateProduit, deleteProduit, getLowStockProduits,
   addMouvement, getMouvements,
   createVente, getVentes, getVenteById, getVenteStats,
-  checkRemoteStocks, applyRemoteVenteStock, getRemoteCatalog, getRemoteClients, getCodeBarreById, syncRemoteCatalog,
+  checkRemoteStocks, applyRemoteVente, getRemoteCatalog, getRemoteClients, getCodeBarreById, getProduitInfo, getClientNom, syncRemoteCatalog,
   getRemoteConfig, applyRemoteConfig,
   getAllClients, createClient, updateClient, deleteClient, getClientVentes,
   getPrixClients, getPrixClient, setPrixClient, setPrixClientsBulk,
@@ -533,15 +533,31 @@ ipcMain.handle('db:createVente', (_e, data) => {
   if (result?.ticket && isRtClient()) {
     const items = (data?.lignes ?? []).map((l: any) => {
       const cb = l.code_barre ?? (l.produit_id ? getCodeBarreById(l.produit_id) : null)
+      const prod = l.produit_id ? getProduitInfo(l.produit_id) : null
       return {
         produit_id: l.produit_id,
         quantite: l.quantite,
+        prix_unitaire: l.prix_unitaire ?? 0,
+        total_ligne: l.total_ligne ?? 0,
         ...(cb ? { code_barre: cb } : {}),
+        ...(prod?.nom ? { nom: prod.nom } : {}),
+        ...(prod?.categorie_id ? { categorie_id: prod.categorie_id } : {}),
         ...(l.variante_id ? { variante_id: l.variante_id } : {}),
-        ...(l.nom_libre ? { nom_libre: l.nom_libre } : {})
+        ...(l.nom_libre ? { nom_libre: l.nom_libre } : {}),
+        ...(l.details ? { details: l.details } : {})
       }
     }).filter((x: any) => x.produit_id !== 99999998)
-    rtSendDecrement(items, data?.caissier_id ?? 0, result.ticket).catch(() => {})
+    const venteData = {
+      total: data.total ?? 0,
+      remise: data.remise ?? 0,
+      montant_paye: data.montant_paye ?? 0,
+      monnaie_rendue: data.monnaie_rendue ?? 0,
+      mode_paiement: data.mode_paiement ?? 'especes',
+      client_id: data.client_id,
+      client_nom: data.client_id ? getClientNom(data.client_id) ?? undefined : undefined,
+      paiements: data.paiements
+    }
+    rtSendDecrement(items, data?.caissier_id ?? 0, result.ticket, venteData).catch(() => {})
   }
   return result
 })
@@ -1081,9 +1097,20 @@ function startSyncServer(port: number) {
       res.setHeader('Content-Type', 'application/json; charset=utf-8')
       try {
         const parsed = JSON.parse(await readBody(req))
-        // Décrément sérialisé via la file d'attente -> atomicité du stock
-        const result = await rtEnqueue(() => applyRemoteVenteStock(parsed.items ?? [], parsed.caissier_id ?? 0, parsed.ticket ?? 'distant'))
-        res.writeHead(200); res.end(JSON.stringify({ ok: result.ok, insuffisants: result.insuffisants }))
+        const result = await rtEnqueue(() => applyRemoteVente(
+          parsed.items ?? [], parsed.caissier_id ?? 0, parsed.ticket ?? 'distant',
+          {
+            total: parsed.vente_data?.total ?? 0,
+            remise: parsed.vente_data?.remise ?? 0,
+            montant_paye: parsed.vente_data?.montant_paye ?? 0,
+            monnaie_rendue: parsed.vente_data?.monnaie_rendue ?? 0,
+            mode_paiement: parsed.vente_data?.mode_paiement ?? 'especes',
+            caisse_id: parsed.caisse_id,
+            client_id: parsed.vente_data?.client_id,
+            paiements: parsed.vente_data?.paiements
+          }
+        ))
+        res.writeHead(200); res.end(JSON.stringify({ ok: result.ok, venteId: result.venteId, ticket: result.ticket, insuffisants: result.insuffisants }))
       } catch (e: any) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: e.message })) }
 
     } else {
@@ -1305,10 +1332,11 @@ function detectLocalIp(): string {
 ipcMain.handle('sync:getLocalIp', () => detectLocalIp())
 
 // ─── MODE CLIENT-SERVEUR : configuration & statut ─────────────────────────────
-ipcMain.handle('rt:setRole', (_e, role: string, ip?: string, port?: number) => {
+ipcMain.handle('rt:setRole', (_e, role: string, ip?: string, port?: number, caisseId?: string) => {
   setParametre('reseau_role', role)
   if (ip !== undefined) setParametre('reseau_serveur_ip', ip)
   if (port !== undefined) setParametre('reseau_serveur_port', String(port))
+  if (caisseId !== undefined) setParametre('caisse_id', caisseId || '1')
   if (role === 'serveur') {
     startSyncServer(Number(getAllParametres()?.reseau_serveur_port || 7890))
     stopRtClient()
@@ -1327,6 +1355,7 @@ ipcMain.handle('rt:getStatus', () => {
     role: p.reseau_role ?? 'none',
     ip: p.reseau_serveur_ip ?? '',
     port: p.reseau_serveur_port ?? '7890',
+    caisse_id: p.caisse_id ?? '1',
     online: isRtOnline(),
     serverRunning: !!(syncHttpServer && syncHttpServer.listening),
     localIp: detectLocalIp(),
